@@ -1,0 +1,9 @@
+RESERVE=30
+MAX_ID=30
+
+#partition=shared
+#reservation=esurface
+
+batch_dir=/n/seage_lab/esurface/BWA_Calibration/simulations/Test_Submittion
+batch_name=Test_Submittion
+batch_prefix=Bots_ART_v4_batch_

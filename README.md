@@ -1,10 +1,19 @@
 # smanage
 Slurm Manage, for submitting and reporting on job arrays run on slurm
 
-The script manages jobs running on a compute cluster that uses the SLURM scheduler (https://slurm.schedmd.com/). 
-It was developed in bash to take advantage of the automatic output from the slurm programs available on the command line, namely sacct and sbatch. The script has two basic modes described below:
+The script manages jobs running on a compute cluster that uses the [SLURM scheduler](https://slurm.schedmd.com/). 
+It was developed in bash to take advantage of the automatic output from the [slurm programs available on the command line](https://slurm.schedmd.com/pdfs/summary.pdf), namely sacct and sbatch.
 
-## 1. Reporting (default mode)
+The easiest way to install the script by adding an alias to the program. Run the following line of code or copy it into the file '~/.bashrc' to make it perminant:
+```
+alias smanage='<pathto>/smanage.sh'
+```
+
+The script has two basic modes described below.
+
+
+
+## Report Mode (default): smanage --report
 The reporting mode parses the output from sacct to create more consise output for large sets of job runs. 
 The most useful example is to show the number of jobs in each state. The following is the output from a batch of 1000 jobs submitted using 'sacct --array' named "BATCH_JOBS":
 
@@ -18,7 +27,7 @@ Finding jobs using: /usr/bin/sacct -XP --noheader --name BATCH_JOBS
 982 PENDING jobs
 ```
 
-When using the report mode, any of the sacct commands (https://slurm.schedmd.com/pdfs/summary.pdf) can be added to generate a report on specific jobs. For example, to report the jobs ran on a specific date (note, on that date 1000 jobs named BATCH_JOBS ran to completion):
+When using the report mode, any of the sacct commands can be added to generate a report on specific jobs. For example, to report the jobs ran on a specific date (note, on that date 1000 jobs named BATCH_JOBS ran to completion):
 
 ```
 $ smanage --report --name=BATCH_JOBS --starttime=2018-08-27
@@ -54,7 +63,7 @@ Rerun these jobs: 34,52
 
 The output for verbose commands can be extended to parse the .err or .out files to provided even more information using the 'SMANAGE_EXT_SOURCE' environment variable.
 
-# 2. Submitting
+## Submit Mode: smanage --submit
 
 
 

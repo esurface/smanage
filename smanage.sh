@@ -10,27 +10,26 @@
 #### USAGE ####
 
 usage() {	
-# Future usage: smanage <MODE> [FLAGS] [sacct|sbatch flags]
-echo "usage: [SACCT_ARGS=args] smanage.sh [sacct_args]
-        [-r|--report [config] [--exclude <job_id,[job_id,...]>]] 
-        [--submit [<config>|<--job_dir <job_dir> <--job_name <job_name>]
-        [--verbose] [--array] [--debug] 
- 
-sacct_args: Add arguments for /usr/bin/sacct by passing arguments inline
-	They can also be passed by setting SACCT_ARGS as an environment variable 
-
-args:
+echo "usage: $0 <MODE> [FLAGS] [SACCT_ARGS]"
+echo 'MODE:
+--report: (default) output information on jobs reported by an sacct call
+--submit: provided an sbatch script to to submit an array of jobs
+--config: create a config file
+--reset: reset the config file to start job submittion from job 0
+For more information: smanage --help <MODE>'  
+echo 'FLAGS:
 --array: Flag to signal that jobs to report on are from sbatch --array
---create-config: Create a config file for submitting or reporting on jobs
 --debug: dry-run whichever commands are input
---report: output report on jobs
---submit: submit jobs through slurm_submit_jobs, requires a config file that defines the batches
---verbose: Add this flag to see more information on failed runs
-"
+--verbose: Add this flag to see more information
+'
+echo 'SACCT_ARGS: 
+Add arguments for sacct passing arguments after smanage args
+They can also be passed by setting SACCT_ARGS as an environment variable 
+'
 }
 
 usage_create_config() {
-echo "usage: $0 --create_config <job_name> [job_id,[job_id,...]]
+echo "usage: $0 --config <job_name> [job_id,[job_id,...]]
 Creates <job_name>_report_config file
 "
 
@@ -364,7 +363,8 @@ submit_batch() {
     if [[ -n $CONFIG ]]; then
         config_arg="--config $CONFIG"
     fi
-    ARRAY=$ARRAY JOB_NAME=$BATCH_NAME NEXT_RUN_ID=$NEXT_RUN_ID $SLURM_SUBMIT_JOBS $config_arg
+    
+    ARRAY=$ARRAY JOB_NAME=$BATCH_NAME NEXT_RUN_ID=$NEXT_RUN_ID $SMANAGE_SUBMIT_BATCH_SCRIPT $config_arg
     if [[ $? -eq 0 ]]; then
         if [[ -n $NEXT_RUN_ID ]]; then
             set_config_value "NEXT_RUN_ID" $NEXT_RUN_ID
@@ -614,6 +614,12 @@ for run in ${all[@]}; do
 done
 
 if [[ -n $SUBMIT ]]; then
+    if [[ -z $SMANAGE_SUBMIT_BATCH_SCRIPT ]]; then
+        echo "Missing sbatch script."
+        usage_submit
+        exit 1
+    fi
+
     submit_batch_jobs
     exit $?
 fi

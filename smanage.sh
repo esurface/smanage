@@ -10,50 +10,72 @@
 #### USAGE ####
 
 usage() {	
-echo "usage: $0 <MODE> [FLAGS] [SACCT_ARGS]"
-echo 'MODE:
---report: (default) output information on jobs reported by an sacct call
+if [ -z $1 ]; then
+    usage_general
+elif [[ $1 = "config" ]]; then
+    usage_config
+elif [[ $1 = "create_config" ]]; then
+    usage_create_config
+elif [[ $1 = "report" ]]; then
+    usage_report
+elif [[ $1 = "reset" ]]; then
+    usage_reset
+elif [[ $1 = "sumbit" ]]; then
+    usage_submit
+else
+    usage_general
+fi
+}
+
+usage_general(){
+echo "usage: smanage <MODE> [FLAGS] [SACCT_ARGS]"
+echo 'MODE: For more information: smanage --help <MODE>
+--report (default): output information on jobs reported by an sacct call
 --submit: provided an sbatch script to to submit an array of jobs
---config: create a config file
+--create_config: Convenience function to create a config file 
 --reset: reset the config file to start job submittion from job 0
-For more information: smanage --help <MODE>'  
-echo 'FLAGS:
+
+FLAGS:
 --array: Flag to signal that jobs to report on are from sbatch --array
 --debug: dry-run whichever commands are input
 --verbose: Add this flag to see more information
-'
-echo 'SACCT_ARGS: 
-Add arguments for sacct passing arguments after smanage args
+
+SACCT_ARGS: 
+Add sacct arguments after smanage args
 They can also be passed by setting SACCT_ARGS as an environment variable 
 '
 }
 
 usage_create_config() {
-echo "usage: $0 --config <job_name> [job_id,[job_id,...]]
-Creates <job_name>_report_config file
+echo "usage: smanage --create_config <job_name> [job_id,[job_id,...]]
+Convenience function to create a config file 
 "
-
 }
 
 usage_reset() {
-echo "usage: $0 --reset <config>
+echo "usage: smanage --reset [--config <CONFIG>]
 Reset the <config> file to start fresh
 "
-
 }
 
 usage_report() {
-echo "usage: $0 --report [config]
+echo "usage: smanage --report [--config <CONFIG>] [SACCT_ARGS]
+Output the report for jobs defined by CONFIG and SACCT_ARGS
 "
 }
 
 usage_submit() {
-echo "usage: $0 --submit <config>
-      usage: $0 --submit <<--batch_name <batch_name>> <--batch_dir <batch_dir>> 
+echo "usage: smanage --submit [--config <CONFIG>]
+      usage: smanage --submit <<--batch_name <batch_name>> <--batch_dir <batch_dir>> 
                           <--batch_prefix> <batch_prefix>>>
                          [--max_id <#>] [--reserve <#>] [--array <#-#>]
                          [--reservation <reservation>] [--partition <partition>]
-    
+"
+usage_config
+}
+
+usage_config() {
+echo "
 Config File Options:
 
 #SLURM MGR SUMBIT OPTIONS
@@ -427,7 +449,6 @@ reserve_submit_batch() {
 
     if [[ $NEXT_RUN_ID -ge $MAX_ID ]]; then
         echo "Ding! Jobs named ${BATCH_NAME} are done!"
-        /usr/bin/crontab -r
         return 0
     fi
 
@@ -452,12 +473,12 @@ reserve_submit_batch() {
 }
 
 submit_batch_jobs() {
-
-    # ARRAY is defined -- immediately run the batch
     if [[ -n $ARRAY ]]; then
+    # if ARRAY is defined -- immediately run the batch
         echo array is $ARRAY
         submit_batch
     elif [[ -n $RESERVE ]] && [[ -n $MAX_ID ]]; then
+    # use the RESERVE and MAX_ID to run the batch
        reserve_submit_batch
     fi
 
@@ -477,10 +498,8 @@ do
             JOBARRAY=1
             ;;
         --config)
-	    shift
+	        shift
             if [[ -n $1 ]] && [[ -e $1 ]]; then
-                CONFIG=$(readlink -f $1)
-            else
                 CONFIG=$(readlink -f $1)
             else
                 usage
@@ -510,23 +529,14 @@ do
             ;;
         -h|--help)
             shift
-            if [ -z $1 ]; then
-                usage
-            elif [[ $1 = "config" ]]; then
-                usage_config
-            elif [[ $1 = "report" ]]; then
-                usage_report
-            elif [[ $1 = "reset" ]]; then
-                usage_reset
-            elif [[ $1 = "submit" ]]; then
-                usage_submit
-            else
-                usage
-            fi
+            usage $1
             exit 0
             ;;
         --list)
             LIST=1
+            ;;
+        --report)
+            REPORT=1
             ;;
         --reset)
             RESET=1
@@ -537,7 +547,7 @@ do
         --verbose) 	
             VERBOSE=1
             ;;
-        *)
+        *) # any unknown args are passed to SACCT
             SACCT_ARGS+=($1)
             ;;
     esac
@@ -547,7 +557,7 @@ done
 if [[ -n $RESET ]]; then
     if [[ -z $CONFIG || ! -e $CONFIG ]]; then
         echo "No config file provided for --reset. Add --config <config>"
-       exit 1
+        exit 1
     fi
     source $CONFIG
     reset_job

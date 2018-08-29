@@ -52,7 +52,7 @@ Convenience function to create a config file
 "
 }
 
-usage_reset() {
+usage_reset_config() {
 echo "usage: smanage --reset [--config <CONFIG>]
 Reset the <config> file to start fresh
 "
@@ -215,51 +215,102 @@ run_times() {
 	echo "	Avg Wall Time: $(convertsecs $avg_wall_time)"
 }
 
+#### SACCT PARSING ####
+# Use SACCT to load the jobs
+COMPLETED=()
+FAILED=()
+TIMEOUT=()
+RUNNING=()
+PENDING=()
+OTHER=()
 
-#### Run State handler functions ####
+parse_sacct_jobs() {
+   
+    if [[ -n $CONFIG ]]; then
+        # Set SACCT_ARGS from CONFIG
+        source $CONFIG
+        if [[ -n $JOB_IDS ]]; then
+            SACCT_ARGS+=("--jobs=${JOB_IDS}")
+        fi
+        if [[ -n $BATCH_NAME ]]; then
+            SACCT_ARGS+=("--name=${BATCH_NAME}")
+        fi
+        if [[ -n $JOB_DATE ]]; then
+            SACCT_ARGS+=("-S ${JOB_DATE}")
+        fi
+    fi
+    
+    echo "Finding jobs using: $SACCT ${SACCT_ARGS[@]}"
+    all=($($SACCT ${SACCT_ARGS[@]}))
+    if [[ ${#all[@]} -eq 0 ]]; then
+	    echo "No jobs found with these sacct args"
+    else
+        echo "Jobs: $(get_sorted_jobs ${all[@]})"
+    fi
+    
+    # Split the job list by STATE
+    for run in ${all[@]}; do
+	    IFS='|' read -ra split <<< "$run" # split the sacct line by '|'
+        state=${split[$JOBSTATE]}
+        if [[ $EXCLUDE -eq 1 ]]; then
+            # don't process excluded jobs
+		    IFS='_' read -ra job <<< "${split[$JOBID]}"
+	        jobid=${job[$JOBID]}
+		    if [[ "${EXCLUDED[@]}" =~ "${jobid}" ]]; then
+			    continue
+		    fi
+	    fi
+    
+        if [[ $state = "COMPLETED" ]]; then
+            COMPLETED+=($run)
+        elif [[ $state = "FAILED" ]]; then
+            FAILED+=($run)
+        elif [[ $state = "TIMEOUT" ]]; then
+            TIMEOUT+=($run)
+        elif [[ $state = "RUNNING" ]]; then
+            RUNNING+=($run)
+        elif [[ $state = "PENDING" ]]; then
+            PENDING+=($run)
+        else
+            OTHER+=($run)
+        fi
+    
+    done
+}
+
+#### REPORT MODE ####
 
 handle_completed() {
 	runs=($@)
 
 	if [ $VERBOSE -eq 1 ]; then
-	run_times ${runs[@]}
-	    if [[ -n SMANAGE_EXT_SOURCE ]]; then
-                _ext_handle_completed ${runs[@]}
-            fi
-	echo ""
+	    run_times ${runs[@]}
+	    if [[ -n $SMANAGE_EXT_SOURCE ]]; then
+            _ext_handle_completed ${runs[@]}
+        fi
+        echo ""
 	fi	
 	
 }
 
 handle_failed() {
-	runs=($@)
-
-	output_dir=$WORK_DIR
-	prefix=batch_
-
-	list=()
+    runs=($@)
+	list=()	
 	for run in ${runs[@]}; do
-		IFS='|' read -ra split <<< "$run"
-		jobid=${split[$JOBID]}
-		list+=($jobid)
-	
-		if [ $VERBOSE -eq 1 ]; then
-			output_errs="$output_dir/$prefix$jobid.err"
-			printf "	Job $jobid Failed:\t"
-			if [ -e $output_errs ]; then
-				echo "	$(cat $output_errs)"
-			else
-				echo "	Output removed"
-			fi
-		fi
+	   	IFS='|' read -ra split <<< "$run"
+		list+=(${split[$JOBID]})
 	done
 
-	echo "Rerun these jobs:"
-	if [ $JOBARRAY -eq 1 ]; then
-		print_sorted_jobs ${list[@]}
-	else
-		pretty_print_tabs ${list[@]}
-	fi
+    echo "Rerun these jobs:"
+	pretty_print_tabs ${list[@]}
+    print_sorted_jobs ${list[@]}
+
+    if [[ $VERBOSE -eq 1 ]]; then
+	    run_times ${runs[@]}
+	    if [[ -n $SMANAGE_EXT_SOURCE ]]; then
+            _ext_handle_failed ${runs[@]}
+        fi
+	fi	
 
 	echo ""
 }
@@ -268,20 +319,16 @@ handle_running() {
 	runs=($@)
 
 	if [ $VERBOSE -eq 1 ]; then
-	list=()	
-	for run in ${runs[@]}; do
-		IFS='|' read -ra split <<< "$run"
-		list+=(${split[$JOBID]})
-	done
+	    list=()	
+	    for run in ${runs[@]}; do
+	    	IFS='|' read -ra split <<< "$run"
+	    	list+=(${split[$JOBID]})
+	    done
 
-	#echo "Running jobs: "
-	#if [ $JOBARRAY -eq 1 ]; then
-	#	print_sorted_jobs ${list[@]}
-	#else
-	#	pretty_print_tabs ${list[@]}
-	#fi
+	    pretty_print_tabs ${list[@]}
+	    print_sorted_jobs ${list[@]}
 
-	echo ""
+	    echo ""
 	fi
 }
 
@@ -315,41 +362,68 @@ handle_other() {
 	pretty_print_tabs ${list[@]}
 }
 
-#### REPORT MODE ####
+report_mode() {
+    local opts="--config --sacct"
+    
+    while test $# -ne 0; do
+        case $1 in
+        --config) shift
+            if [[ -z $1 || ! -e $1 ]]; then
+                usage "report"
+                return 1
+            fi
+            CONFIG=$(readlink -f $1)
+        ;;
+        --sacct) shift
+            while [[ -n $1 && ! $opts =~ $1 ]]; do
+                SACCT_ARGS+=($1)
+                shift
+            done 
+        ;;
+        *)
+            usage "report"
+            return 1
+        ;;        
+        esac
+    done
+    
+    parse_sacct_jobs
+    
+    echo "${#COMPLETED[@]} COMPLETED jobs"
+    if [[ ${#COMPLETED[@]} > 0 && $VERBOSE -eq 1 ]]; then
+        handle_completed ${COMPLETED[@]}
+    fi
+    
+    echo "${#FAILED[@]} FAILED jobs"
+    if [[ ${#FAILED[@]} > 0 && $VERBOSE -eq 1 ]]; then
+    	handle_failed ${FAILED[@]}
+    fi
+    
+    echo "${#TIMEOUT[@]} TIMEOUT jobs"
+    if [[ ${#TIMEOUT[@]} > 0 && $VERBOSE -eq 1 ]]; then
+        handle_failed ${TIMEOUT[@]}
+    fi
+    
+    echo "${#RUNNING[@]} RUNNING jobs"
+    if [[ ${#RUNNING[@]} > 0 && $VERBOSE -eq 1 ]]; then
+        handle_running ${RUNNING[@]}
+    fi
+    
+    echo "${#PENDING[@]} PENDING jobs"
+    if [[ ${#PENDING[@]} > 0 && $VERBOSE -eq 1 ]]; then
+        handle_pending ${PENDING[@]}
+    fi
+    
+    if [[ ${#OTHER[@]} > 0 ]]; then
+    	echo "${#OTHER[@]} jobs with untracked status"
+    	if [[ $VERBOSE -eq 1 ]]; then
+    		handle_other ${OTHER[@]}
+    	fi
+    fi
 
-run_batch_report() {
-echo "${#COMPLETED[@]} COMPLETED jobs"
-if [[ ${#COMPLETED[@]} > 0 && $VERBOSE -eq 1 ]]; then
-    handle_completed ${COMPLETED[@]}
-fi
-
-echo "${#FAILED[@]} FAILED jobs"
-if [[ ${#FAILED[@]} > 0 && $VERBOSE -eq 1 ]]; then
-	handle_failed ${FAILED[@]}
-fi
-
-echo "${#TIMEOUT[@]} TIMEOUT jobs"
-if [[ ${#TIMEOUT[@]} > 0 && $VERBOSE -eq 1 ]]; then
-    handle_failed ${TIMEOUT[@]}
-fi
-
-echo "${#RUNNING[@]} RUNNING jobs"
-if [[ ${#RUNNING[@]} > 0 && $VERBOSE -eq 1 ]]; then
-    handle_running ${RUNNING[@]}
-fi
-
-echo "${#PENDING[@]} PENDING jobs"
-if [[ ${#PENDING[@]} > 0 && $VERBOSE -eq 1 ]]; then
-    handle_pending ${PENDING[@]}
-fi
-
-if [[ ${#OTHER[@]} > 0 ]]; then
-	echo "${#OTHER[@]} jobs with untracked status"
-	if [[ $VERBOSE -eq 1 ]]; then
-		handle_other ${OTHER[@]}
-	fi
-fi
+    return 0
 }
+
 
 #### RESET MODE ####
 
@@ -365,6 +439,20 @@ $DEBUG sed -i "s/JOB_IDS=.*/JOB_IDS=/" $CONFIG
 $DEBUG sed -i "s/JOB_DATE=.*/JOB_DATE=/" $CONFIG
 
 }
+
+reset_mode() {
+    if [[ -z $1 || ! -e $1 ]]; then
+       usage "reset"
+       return 1
+    fi
+    CONFIG=$(readling -f $1)
+    
+    source $CONFIG
+    reset_config
+    
+    return 0
+}
+
 
 #### SUBMIT MODE ####
 
@@ -386,13 +474,41 @@ submit_batch() {
         config_arg="--config $CONFIG"
     fi
     
-    ARRAY=$ARRAY JOB_NAME=$BATCH_NAME NEXT_RUN_ID=$NEXT_RUN_ID $SMANAGE_SUBMIT_BATCH_SCRIPT $config_arg
-    if [[ $? -eq 0 ]]; then
+    if [[ -z $BATCH_DIR ]]; then
+        BATCH_DIR=$PWD
+    fi
+    if [ -z $BATCH_NAME ]; then
+        BATCH_NAME=$(basename $BATCH_DIR)
+    fi
+
+    OUTPUT=$($DEBUG $SBATCH -D $BATCH_DIR --job-name="$BATCH_NAME" 
+                    $array_arg $reservation_arg
+                    $SBATCH_SCRIPT $SBATCH_SCRIPT_ARGS
+                     $NEXT_RUN_ID)
+
+    if [[ $? -ne 0 ]]; then
+        echo ERROR: $OUTPUT
         if [[ -n $NEXT_RUN_ID ]]; then
             set_config_value "NEXT_RUN_ID" $NEXT_RUN_ID
             set_config_value "LAST_RUN_ID" $LAST_RUN_ID
         fi
+        exit 1
     fi
+
+    # read the new job number from the sbatch output
+    echo $OUTPUT
+    IFS=" " read -ra split <<< "$OUTPUT"
+    job_id=${split[3]}
+
+    # create a report script -- only do this once
+    if [[ -z $CONFIG ]]; then
+        echo "creating report ${JOB_NAME}_report.sh"
+        $DEBUG create_config --dir $output_dir --name ${JOB_NAME} $job_id
+    else
+        echo "Appending $job_id to $(basename $CONFIG)"
+        $DEBUG create_config --append $CONFIG $job_id
+    fi
+    
 }
 
 reserve_submit_batch() {
@@ -473,167 +589,89 @@ reserve_submit_batch() {
 }
 
 submit_batch_jobs() {
-    if [[ -n $ARRAY ]]; then
-    # if ARRAY is defined -- immediately run the batch
-        echo array is $ARRAY
+    if [[ -n $RESERVE ]] && [[ -n $MAX_ID ]]; then
+        # use the RESERVE and MAX_ID to run the batch
+        reserve_submit_batch
+    else
         submit_batch
-    elif [[ -n $RESERVE ]] && [[ -n $MAX_ID ]]; then
-    # use the RESERVE and MAX_ID to run the batch
-       reserve_submit_batch
     fi
 
     return $?
 }
 
+submit_mode() {
+    local opts="--config --sacct --sbatch"
+
+    while test $# -ne 0; do
+        case $1 in
+        --config) shift
+            if [[ -z $1 || ! -e $1 ]]; then
+                usage "submit"
+                return 1
+            fi
+            CONFIG=$(readlink -f $1)
+        ;;
+        --sacct) shift
+            while [[ -n $1 && ! $opts =~ $1 ]]; do
+                SACCT_ARGS+=($1)
+                shift
+            done 
+        ;;
+        --sbatch) shift
+            while [[ -n $1 && ! $opts =~ $1 ]]; do        
+                SBATCH_ARGS+=($1)
+                shift
+            done 
+        ;;      
+        *)
+            usage "submit"
+            return 1
+        ;;        
+        esac
+    done
+
+    submit_batch_jobs
+
+    return $?
+
+}
+
 #### MAIN ####
 
-JOBARRAY=
 DEBUG=
-WORK_DIR=$PWD
-VERBOSE=0
-while test $# -gt 0
-do
-    case "$1" in
-        --array)
-            JOBARRAY=1
-            ;;
-        --config)
-	        shift
-            if [[ -n $1 ]] && [[ -e $1 ]]; then
-                CONFIG=$(readlink -f $1)
-            else
-                usage
-                exit 1
-            fi
-            ;;
-        --dir)
-            shift
-            if [ -z $1 ]; then
-                usage
-                exit 1
-            fi
-            WORK_DIR=$1
-            ;;
-        --debug)
-            # test commands by printing them
-            DEBUG=/usr/bin/echo
-            ;;
-        --exclude)
-            shift
-            if [ -z $1 ]; then
-                usage
-                exit 1
-            fi
-            EXCLUDE=1
-            IFS=',' read -ra EXCLUDED <<< "$1"
-            ;;
-        -h|--help)
-            shift
-            usage $1
-            exit 0
-            ;;
-        --list)
-            LIST=1
-            ;;
-        --report)
-            REPORT=1
-            ;;
-        --reset)
-            RESET=1
-            ;;
-        --submit)
-            SUBMIT=1
-            ;;
-        --verbose) 	
-            VERBOSE=1
-            ;;
-        *) # any unknown args are passed to SACCT
-            SACCT_ARGS+=($1)
-            ;;
+VERBOSE=
+
+# print out help if no args provided
+if [[ -z $1 ]]; then
+    usage
+    exit 0
+fi
+
+# handle smanage options
+modes="report reset submit"
+while [[ $# -gt 0 ]]; do
+    if [[ $modes =~ $1 ]]; then
+       break
+    fi
+    case $1 in
+    -h|--help) usage $OPTARG 
+       exit 0 
+    ;;
+    -d|--debug) DEBUG=/usr/bin/echo ;;
+    -v|--verbose) VERBOSE=1 ;;
     esac
     shift
 done
 
-if [[ -n $RESET ]]; then
-    if [[ -z $CONFIG || ! -e $CONFIG ]]; then
-        echo "No config file provided for --reset. Add --config <config>"
-        exit 1
-    fi
-    source $CONFIG
-    reset_job
-    exit 0
-fi
+# the MODE must be the first parameter after opts
+# the remaining arguments get passed whichever mode is specified
+echo $1
+case "$1" in
+    report) report_mode ${@:2:$#-1} ;;
+    reset)  reset_mode  ${@:2:$#-1} ;;
+    submit) submit_mode ${@:2:$#-1} ;;
+    *) usage ;; 
+esac
+exit $?
 
-# Set SACCT_ARGS from CONFIG
-if [[ -n $CONFIG ]]; then
-    source $CONFIG
-    if [[ -n $JOB_IDS ]]; then
-        SACCT_ARGS+=("--jobs=${JOB_IDS}")
-    fi
-    if [[ -n $BATCH_NAME ]]; then
-        SACCT_ARGS+=("--name=${BATCH_NAME}")
-    fi
-    if [[ -n $JOB_DATE ]]; then
-        SACCT_ARGS+=("-S ${JOB_DATE}")
-    fi
-fi
-
-# Use SACCT to load the jobs
-COMPLETED=()
-FAILED=()
-TIMEOUT=()
-RUNNING=()
-PENDING=()
-OTHER=()
-
-echo "Finding jobs using: $SACCT ${SACCT_ARGS[@]}"
-all=($($SACCT ${SACCT_ARGS[@]}))
-if [[ ${#all[@]} -eq 0 ]]; then
-	echo "No jobs found with these sacct args"
-else
-    echo "Jobs: $(get_sorted_jobs ${all[@]})"
-fi
-
-# Split the job list by STATE
-for run in ${all[@]}; do
-	IFS='|' read -ra split <<< "$run" # split the sacct line by '|'
-    state=${split[$JOBSTATE]}
-    if [[ $EXCLUDE -eq 1 ]]; then
-        # don't process excluded jobs
-		IFS='_' read -ra job <<< "${split[$JOBID]}"
-	    jobid=${job[$JOBID]}
-		if [[ "${EXCLUDED[@]}" =~ "${jobid}" ]]; then
-			continue
-		fi
-	fi
-
-    if [[ $state = "COMPLETED" ]]; then
-        COMPLETED+=($run)
-    elif [[ $state = "FAILED" ]]; then
-        FAILED+=($run)
-    elif [[ $state = "TIMEOUT" ]]; then
-        TIMEOUT+=($run)
-    elif [[ $state = "RUNNING" ]]; then
-        RUNNING+=($run)
-    elif [[ $state = "PENDING" ]]; then
-        PENDING+=($run)
-    else
-        OTHER+=($run)
-    fi
-
-done
-
-if [[ -n $SUBMIT ]]; then
-    if [[ -z $SMANAGE_SUBMIT_BATCH_SCRIPT ]]; then
-        echo "Missing sbatch script."
-        usage_submit
-        exit 1
-    fi
-
-    submit_batch_jobs
-    exit $?
-fi
-
-run_batch_report
-
-exit 0
+# vim: sw=4:ts=4:expandtab

@@ -7,75 +7,82 @@
 # Copyright (c) 2018 Erik Surface
 #
 
+#### SMANAGE_EXT_SOURCE ####
+# define SMANAGE_EXT_SOURCE to add a script to parse the .err or .out files
+# in the script, define a function called '_ext_handle_completed' that will be passed
+# a bash list of jobs. See _ext_handle_example.
+if [[ -n $SMANAGE_EXT_SOURCE ]]; then
+source $SMANAGE_EXT_SOURCE
+fi
+
 #### USAGE ####
 
 usage() {	
 if [ -z $1 ]; then
     usage_general
 elif [[ $1 = "config" ]]; then
-    usage_config
-elif [[ $1 = "create_config" ]]; then
-    usage_create_config
+    usage_config_mode
 elif [[ $1 = "report" ]]; then
-    usage_report
-elif [[ $1 = "reset" ]]; then
-    usage_reset
-elif [[ $1 = "sumbit" ]]; then
-    usage_submit
+    usage_report_mode
+elif [[ $1 = "submit" ]]; then
+    usage_submit_mode
 else
     usage_general
 fi
 }
 
 usage_general(){
-echo "usage: smanage <MODE> [FLAGS] [SACCT_ARGS]"
-echo 'MODE: For more information: smanage --help <MODE>
---report (default): output information on jobs reported by an sacct call
---submit: provided an sbatch script to to submit an array of jobs
---create_config: Convenience function to create a config file 
---reset: reset the config file to start job submittion from job 0
-
+echo 'usage: smanage [FLAGS] <MODE> [SACCT_ARGS]'
+echo "
 FLAGS:
---array: Flag to signal that jobs to report on are from sbatch --array
---debug: dry-run whichever commands are input
---verbose: Add this flag to see more information
+-a|--array:  Signal that jobs to report on are from sbatch --array
+-h|--help:   Show help messages. For a specific mode try, --help <MODE>
+-d|--debug:  Run smanage in debug mode (performs a dry-run of slurm commands)
+-v|--verbose: Print more information at each step
+
+MODE: 
+report (default): output information on jobs reported by an sacct call
+submit: provided an sbatch script to to submit an array of jobs
+config: Convenience function to create or append to a config file 
 
 SACCT_ARGS: 
 Add sacct arguments after smanage args
 They can also be passed by setting SACCT_ARGS as an environment variable 
+
+SMANAGE_EXT_SOURCE:
+Define the env variable SMANAGE_EXT_SOURCE to add a script to parse the .err or .out files
+In the script, define a function called '_ext_handle_completed' that will be passed a bash list of jobs. See _ext_handle_example.
+
+"
+}
+
+usage_config_mode() {
+echo 'usage: smanage config 
+  [--append <--config <CONFIG> [--jobids=<job_id>[,job_id,...]] ]
+  [--create <--jobname <job_name>> <--jobdir <job_dir>> [--jobids=<job_id>[,job_id,...]] ]
+  [--reset <--config <CONFIG>]
+Create, reset or append job ids to a config file
 '
 }
 
-usage_create_config() {
-echo "usage: smanage --create_config <job_name> [job_id,[job_id,...]]
-Convenience function to create a config file 
-"
-}
-
-usage_reset_config() {
-echo "usage: smanage --reset [--config <CONFIG>]
-Reset the <config> file to start fresh
-"
-}
-
-usage_report() {
-echo "usage: smanage --report [--config <CONFIG>] [SACCT_ARGS]
+usage_report_mode() {
+echo 'usage: smanage report [--config <CONFIG>] [SACCT_ARGS]
 Output the report for jobs defined by CONFIG and SACCT_ARGS
-"
+'
 }
 
-usage_submit() {
-echo "usage: smanage --submit [--config <CONFIG>]
-      usage: smanage --submit <<--batch_name <batch_name>> <--batch_dir <batch_dir>> 
+usage_submit_mode() {
+echo 'usage: smanage --submit [--config <CONFIG>]
+usage: smanage --submit <<--batch_name <batch_name>> <--batch_dir <batch_dir>> 
                           <--batch_prefix> <batch_prefix>>>
                          [--max_id <#>] [--reserve <#>] [--array <#-#>]
                          [--reservation <reservation>] [--partition <partition>]
-"
-usage_config
+'
+usage_config_file
 }
 
-usage_config() {
-echo "
+usage_config_file() {
+echo '
 Config File Options:
 
 #SLURM MGR SUMBIT OPTIONS
@@ -91,20 +98,12 @@ ARRAY=[#-# jobs to run]
 # SBATCH OPTIONS
 PARTITION=[which partition to submit to]
 RESERVATION=[targeted set of nodes]
-"
+'
 }
-
-#### SMANAGE_EXT_SOURCE ####
-# define SMANAGE_EXT_SOURCE to add a script to parse the .err or .out files
-# in the script, define a function called '_ext_handle_completed' that will be passed
-# a bash list of jobs. See _ext_handle_example.
-# the 'smanage --job_dir' must be provided
-if [[ -n $SMANAGE_EXT_SOURCE ]]; then
-source $SMANAGE_EXT_SOURCE
-fi
 
 #### GLOBALS ####
 SACCT=/usr/bin/sacct
+SBATCH=/usr/bin/sbatch
 MaxArraySize=$(/usr/bin/scontrol show config | sed -n '/^MaxArraySize/s/.*= *//p')
 
 # Required SACCT arguments and idexes to them
@@ -278,6 +277,157 @@ parse_sacct_jobs() {
     done
 }
 
+#### CONFIG MODE ####
+
+append_ids() {
+    source $CONFIG
+    if [[ -z $JOB_IDS ]]; then
+        # Add the job ids env var if missing
+        if [[ $(grep "JOB_IDS" $CONFIG) ]]; then
+            sed -i "s/JOB_IDS=.*/JOB_IDS=${IDS}/" $CONFIG
+        else
+            echo "JOB_IDS=${IDS}" >> $CONFIG
+        fi
+    else
+        # Add the job ids in sorted order
+        JOB_IDS=$(echo $JOB_IDS,$IDS)
+        JOB_IDS=$(echo $JOB_IDS | tr , "\n" | sort | uniq | tr "\n" , ; echo )
+        sed -i "s/JOB_IDS=.*/JOB_IDS=${JOB_IDS}/" $CONFIG
+    fi
+
+    if [[ -z $JOB_DATE ]]; then
+        # Add the job date if it is missing
+        JOB_DATE="$(date +%Y-%m-%dT%H:%M)"
+        if [[ $(grep "JOB_DATE" $CONFIG) ]]; then
+            sed -i "s/JOB_DATE=.*/JOB_DATE=${JOB_DATE}/" $CONFIG
+        else
+            echo "JOB_DATE=${JOB_DATE}" >> $CONFIG
+        fi
+    fi
+
+}
+
+append_config()
+{
+    if [[ $# -eq 0 ]]; then
+        usage "config"
+        return 1
+    fi
+
+    while test $# -ne 0; do
+        case $1 in
+        --jobids) shift
+            if [[ -z $1 ]]; then
+                usage "config"
+                return 1
+            fi
+            IDS=$1
+        ;;
+        --config) shift
+            if [[ -z $1 || ! -e $1 ]]; then
+                usage "config"
+                return 1
+            fi
+            CONFIG=$(readlink -f $1)
+        ;;
+        *) usage "config"
+             return 1
+        ;;
+        esac
+        shift
+    done
+    append_ids $IDS
+}
+
+create_config() {
+    if [[ $# -eq 0 ]]; then
+        usage "config"
+        return 1
+    fi
+
+    while test $# -ne 0; do
+        case $1 in
+        --jobids) shift
+            JOB_IDS=$1
+        ;;
+        --jobname) shift
+            if [[ -z $1 ]]; then
+                usage "config"
+                return 1
+            fi
+            JOB_NAME=$1
+            ;;
+        --jobdir) shift
+            if [[ -z $1 || ! -e $1 ]]; then
+                usage "config"
+                return 1
+            fi
+            JOB_DIR=$1
+        ;;
+        *) usage "config"
+            return 1
+        ;;
+        esac
+        shift
+    done
+
+echo "Creating config file ${JOB_NAME}_CONFIG"
+
+JOB_DATE="$(date +%Y-%m-%dT%H:%M)"
+cat << EOT > ${JOB_NAME}_CONFIG
+BATCH_NAME=$JOB_NAME
+JOB_IDS=$JOB_IDS
+BATCH_DIR=$JOB_DIR
+JOB_DATE=$JOB_DATE
+
+EOT
+
+}
+
+reset_config() {
+    if [[ -z $1 || ! -e $1 ]]; then
+       usage "config"
+       return 1
+    fi
+    CONFIG=$(readlink -f $1)
+    source $CONFIG
+    
+    echo "Resetting $BATCH_NAME"
+
+    $DEBUG sed -i "s/JOB_IDS=.*/JOB_IDS=/" $CONFIG
+    $DEBUG sed -i "s/JOB_DATE=.*/JOB_DATE=/" $CONFIG
+    
+    $DEBUG sed -i "s/NEXT_RUN_ID=.*//" $CONFIG
+    $DEBUG sed -i "s/LAST_RUN_ID=.*//" $CONFIG
+    
+    return 0
+}
+
+config_mode() {
+    if [[ $# -eq 0 ]]; then
+        usage "config"
+        return 1
+    fi
+        
+    while test $# -ne 0; do
+        case $1 in
+        --append) append_config ${@:2:$#-1} 
+            return $?
+        ;;
+        --create) create_config ${@:2:$#-1}
+            return $?
+        ;;
+        --reset) reset_config ${@:2:$#-1}
+            return $?
+        ;;
+        *) usage "config"
+            return 1
+        ;;        
+        esac
+    done
+
+}
+    
 #### REPORT MODE ####
 
 handle_completed() {
@@ -373,12 +523,13 @@ report_mode() {
                 return 1
             fi
             CONFIG=$(readlink -f $1)
+            shift
         ;;
         --sacct) shift
             while [[ -n $1 && ! $opts =~ $1 ]]; do
                 SACCT_ARGS+=($1)
                 shift
-            done 
+            done
         ;;
         *)
             usage "report"
@@ -425,35 +576,6 @@ report_mode() {
 }
 
 
-#### RESET MODE ####
-
-reset_job() {
-
-echo "Resetting $BATCH_NAME"
-
-if [[ $VERBOSE -eq 1 ]]; then
-    $DEBUG rm -rf $BATCH_DIR/*.sh $BATCH_DIR/output/*
-fi
-
-$DEBUG sed -i "s/JOB_IDS=.*/JOB_IDS=/" $CONFIG
-$DEBUG sed -i "s/JOB_DATE=.*/JOB_DATE=/" $CONFIG
-
-}
-
-reset_mode() {
-    if [[ -z $1 || ! -e $1 ]]; then
-       usage "reset"
-       return 1
-    fi
-    CONFIG=$(readling -f $1)
-    
-    source $CONFIG
-    reset_config
-    
-    return 0
-}
-
-
 #### SUBMIT MODE ####
 
 set_config_value() {
@@ -469,7 +591,6 @@ fi
 }
 
 submit_batch() {
-    echo "Submitting jobs $NEXT_RUN_ID - $LAST_RUN_ID as $ARRAY"
     if [[ -n $CONFIG ]]; then
         config_arg="--config $CONFIG"
     fi
@@ -484,7 +605,7 @@ submit_batch() {
     OUTPUT=$($DEBUG $SBATCH -D $BATCH_DIR --job-name="$BATCH_NAME" 
                     $array_arg $reservation_arg
                     $SBATCH_SCRIPT $SBATCH_SCRIPT_ARGS
-                     $NEXT_RUN_ID)
+                    $NEXT_RUN_ID)
 
     if [[ $? -ne 0 ]]; then
         echo ERROR: $OUTPUT
@@ -502,11 +623,9 @@ submit_batch() {
 
     # create a report script -- only do this once
     if [[ -z $CONFIG ]]; then
-        echo "creating report ${JOB_NAME}_report.sh"
-        $DEBUG create_config --dir $output_dir --name ${JOB_NAME} $job_id
+        $DEBUG config_mode --create --jobdir $output_dir --jobname ${JOB_NAME} --jobids $job_id
     else
-        echo "Appending $job_id to $(basename $CONFIG)"
-        $DEBUG create_config --append $CONFIG $job_id
+        $DEBUG config_mode --append --config $CONFIG --jobids $job_id
     fi
     
 }
@@ -585,6 +704,7 @@ reserve_submit_batch() {
     fi
   fi
     
+  echo "Submitting jobs $NEXT_RUN_ID - $LAST_RUN_ID as $ARRAY"
   submit_batch
 }
 
@@ -593,6 +713,7 @@ submit_batch_jobs() {
         # use the RESERVE and MAX_ID to run the batch
         reserve_submit_batch
     else
+        echo "Submitting jobs $ARRAY"
         submit_batch
     fi
 
@@ -600,8 +721,12 @@ submit_batch_jobs() {
 }
 
 submit_mode() {
-    local opts="--config --sacct --sbatch"
+    if [[ $# -eq 0 ]]; then
+        usage "submit"
+        return 1
+    fi
 
+    local opts="--config --sacct --sbatch"
     while test $# -ne 0; do
         case $1 in
         --config) shift
@@ -640,6 +765,7 @@ submit_mode() {
 
 DEBUG=
 VERBOSE=
+HELP=
 
 # print out help if no args provided
 if [[ -z $1 ]]; then
@@ -648,25 +774,30 @@ if [[ -z $1 ]]; then
 fi
 
 # handle smanage options
-modes="report reset submit"
+modes="report reset submit config"
+MODE=
 while [[ $# -gt 0 ]]; do
-    if [[ $modes =~ $1 ]]; then
-       break
-    fi
     case $1 in
-    -h|--help) usage $OPTARG 
-       exit 0 
-    ;;
+    -h|--help) HELP=1 ;; 
     -d|--debug) DEBUG=/usr/bin/echo ;;
     -v|--verbose) VERBOSE=1 ;;
     esac
+    # the MODE must be the first parameter after opts
+    if [[ $modes =~ $1 ]]; then
+       MODE=$1
+       break
+    fi
     shift
 done
 
-# the MODE must be the first parameter after opts
-# the remaining arguments get passed whichever mode is specified
-echo $1
-case "$1" in
+if [[ -n $HELP ]]; then
+    usage "$MODE"
+    exit 0
+fi
+
+# the remaining arguments get passed whichever MODE is specified
+case "$MODE" in
+    config) config_mode ${@:2:$#-1} ;;
     report) report_mode ${@:2:$#-1} ;;
     reset)  reset_mode  ${@:2:$#-1} ;;
     submit) submit_mode ${@:2:$#-1} ;;

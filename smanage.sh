@@ -32,7 +32,7 @@ fi
 }
 
 usage_general(){
-echo 'usage: smanage [FLAGS] <MODE> [SACCT_ARGS]'
+echo 'usage: smanage [FLAGS] <MODE> [MODE_ARGS]'
 echo "
 FLAGS:
 -a|--array:  Signal that jobs to report on are from sbatch --array
@@ -43,11 +43,17 @@ FLAGS:
 MODE: 
 report (default): output information on jobs reported by an sacct call
 submit: provided an sbatch script to to submit an array of jobs
-config: Convenience function to create or append to a config file 
+config: Convenience function to create, reset or append to a config file
 
-SACCT_ARGS: 
-Add sacct arguments after smanage args
+SACCT_ARGS:
+Specify which sacct arguments to call using the '--sacct' flag followed
+by any valid sacct arguments
 They can also be passed by setting SACCT_ARGS as an environment variable 
+
+SBATCH_ARGS:
+For submit mode, specify the sbatch argument using the '--sbatch' flag followed
+by any valid sbatch arguments including the sbatch submit script.
+They can also be passed by setting SBATCH_ARGS as an environment variable.
 
 SMANAGE_EXT_SOURCE:
 Define the env variable SMANAGE_EXT_SOURCE to add a script to parse the .err or .out files
@@ -59,25 +65,33 @@ In the script, define a function called '_ext_handle_completed' that will be pas
 usage_config_mode() {
 echo 'usage: smanage config 
   [--append <--config <CONFIG> [--jobids=<job_id>[,job_id,...]] ]
-  [--create <--jobname <job_name>> <--jobdir <job_dir>> [--jobids=<job_id>[,job_id,...]] ]
+  [--create <--batch_name <name>> <--batch_dir <dir>> [--jobids=<job_id>[,job_id,...]] ]
   [--reset <--config <CONFIG>]
 Create, reset or append job ids to a config file
 '
 }
 
 usage_report_mode() {
-echo 'usage: smanage report [--config <CONFIG>] [SACCT_ARGS]
+echo 'usage: smanage report [--config <CONFIG>] [--sacct <SACCT_ARGS>]
 Output the report for jobs defined by CONFIG and SACCT_ARGS
 '
 }
 
 usage_submit_mode() {
-echo 'usage: smanage --submit [--config <CONFIG>]
-usage: smanage --submit <<--batch_name <batch_name>> <--batch_dir <batch_dir>> 
-                          <--batch_prefix> <batch_prefix>>>
-                         [--max_id <#>] [--reserve <#>] [--array <#-#>]
-                         [--reservation <reservation>] [--partition <partition>]
+echo 'usage: smanage --submit [--config <CONFIG>] [--sacct <SACCT_ARGS>] [--sbatch <SBATCH_ARGS>]
+usage: smanage --submit [--batch_name <batch_name>] [--batch_dir <batch_dir>] 
+                        [--max_id <#>] [--reserve <#>] 
+                        [--sacct <SACCT_ARGS>] [--sbatch <SBATCH_ARGS>]
+Submit a batch of jobs to slurm.
+
+Use either a CONFIG file or smanage --sbatch args to specify information about the batch. 
+--batch_name: the name of the batch. This will override the sacct and sbatch --job_name command 
+    if both are provided. Default is the name of the directory containing the batched jobs.
+--batch_dir: the location of the batch jobs.
+--max_id: the maximum job number (HINT: can be above the slurm enforced cap, MaxArraySize)
+--reserve: the number of jobs to submit at a time (HINT: should be less than MaxArraySize)
 '
+
 usage_config_file
 }
 
@@ -87,17 +101,12 @@ Config File Options:
 
 #SLURM MGR SUMBIT OPTIONS
 BATCH_DIR=[directory where the batch of jobs is stored]
-BATCH_PREFIX=[the prefix name for the batch set]
 BATCH_NAME=[optional name of the batch as it will appear in an sacct query]
-BATCH_SCRIPT=[sbatch script to run]
+SBATCH_ARGS=[script and its argument to run with sbatch]
 
 RESERVE=[size of the reservation aka number of jobs allows at a time]
 MAX_ID=[max job index of the array]
-ARRAY=[#-# jobs to run]
 
-# SBATCH OPTIONS
-PARTITION=[which partition to submit to]
-RESERVATION=[targeted set of nodes]
 '
 }
 
@@ -214,6 +223,18 @@ run_times() {
 	echo "	Avg Wall Time: $(convertsecs $avg_wall_time)"
 }
 
+set_config_value() {
+PARAM=$1
+VALUE=$2
+
+if [[ $(grep $PARAM $CONFIG) ]]; then
+    $DEBUG sed -i "s/${PARAM}=.*/${PARAM}=${VALUE}/" $CONFIG
+else
+    $DEBUG echo "${PARAM}=${VALUE}" >> $CONFIG
+fi
+
+}
+
 #### SACCT PARSING ####
 # Use SACCT to load the jobs
 COMPLETED=()
@@ -234,8 +255,8 @@ parse_sacct_jobs() {
         if [[ -n $BATCH_NAME ]]; then
             SACCT_ARGS+=("--name=${BATCH_NAME}")
         fi
-        if [[ -n $JOB_DATE ]]; then
-            SACCT_ARGS+=("-S ${JOB_DATE}")
+        if [[ -n $BATCH_DATE ]]; then
+            SACCT_ARGS+=("-S ${BATCH_DATE}")
         fi
     fi
     
@@ -283,26 +304,18 @@ append_ids() {
     source $CONFIG
     if [[ -z $JOB_IDS ]]; then
         # Add the job ids env var if missing
-        if [[ $(grep "JOB_IDS" $CONFIG) ]]; then
-            sed -i "s/JOB_IDS=.*/JOB_IDS=${IDS}/" $CONFIG
-        else
-            echo "JOB_IDS=${IDS}" >> $CONFIG
-        fi
+        set_config_value "JOB_IDS" $IDS
     else
         # Add the job ids in sorted order
         JOB_IDS=$(echo $JOB_IDS,$IDS)
         JOB_IDS=$(echo $JOB_IDS | tr , "\n" | sort | uniq | tr "\n" , ; echo )
-        sed -i "s/JOB_IDS=.*/JOB_IDS=${JOB_IDS}/" $CONFIG
+        set_config_value "JOB_IDS" $JOB_IDS
     fi
 
-    if [[ -z $JOB_DATE ]]; then
+    if [[ -z $BATCH_DATE ]]; then
         # Add the job date if it is missing
-        JOB_DATE="$(date +%Y-%m-%dT%H:%M)"
-        if [[ $(grep "JOB_DATE" $CONFIG) ]]; then
-            sed -i "s/JOB_DATE=.*/JOB_DATE=${JOB_DATE}/" $CONFIG
-        else
-            echo "JOB_DATE=${JOB_DATE}" >> $CONFIG
-        fi
+        BATCH_DATE="$(date +%Y-%m-%dT%H:%M)"
+        set_config_value "BATCH_DATE" $BATCH_DATE
     fi
 
 }
@@ -316,7 +329,7 @@ append_config()
 
     while test $# -ne 0; do
         case $1 in
-        --jobids) shift
+        --job_ids) shift
             if [[ -z $1 ]]; then
                 usage "config"
                 return 1
@@ -340,29 +353,24 @@ append_config()
 }
 
 create_config() {
-    if [[ $# -eq 0 ]]; then
-        usage "config"
-        return 1
-    fi
-
     while test $# -ne 0; do
         case $1 in
-        --jobids) shift
+        --job_ids) shift
             JOB_IDS=$1
         ;;
-        --jobname) shift
+        --batch_name) shift
             if [[ -z $1 ]]; then
                 usage "config"
                 return 1
             fi
-            JOB_NAME=$1
+            BATCH_NAME=$1
             ;;
-        --jobdir) shift
+        --batch_dir) shift
             if [[ -z $1 || ! -e $1 ]]; then
                 usage "config"
                 return 1
             fi
-            JOB_DIR=$1
+            BATCH_DIR=$1
         ;;
         *) usage "config"
             return 1
@@ -371,14 +379,22 @@ create_config() {
         shift
     done
 
-echo "Creating config file ${JOB_NAME}_CONFIG"
+    if [[ -z $BATCH_DIR ]]; then
+        BATCH_DIR=$PWD
+    fi
 
-JOB_DATE="$(date +%Y-%m-%dT%H:%M)"
-cat << EOT > ${JOB_NAME}_CONFIG
-BATCH_NAME=$JOB_NAME
+    if [ -z $BATCH_NAME ]; then
+        BATCH_NAME=$(basename $BATCH_DIR)
+    fi
+    BATCH_DATE="$(date +%Y-%m-%dT%H:%M)"
+
+echo "Creating config file ${BATCH_NAME}_CONFIG"
+
+cat << EOT > ${BATCH_NAME}_CONFIG
+BATCH_NAME=$BATCH_NAME
+BATCH_DIR=$BATCH_DIR
+BATCH_DATE=$BATCH_DATE
 JOB_IDS=$JOB_IDS
-BATCH_DIR=$JOB_DIR
-JOB_DATE=$JOB_DATE
 
 EOT
 
@@ -394,12 +410,11 @@ reset_config() {
     
     echo "Resetting $BATCH_NAME"
 
-    $DEBUG sed -i "s/JOB_IDS=.*/JOB_IDS=/" $CONFIG
-    $DEBUG sed -i "s/JOB_DATE=.*/JOB_DATE=/" $CONFIG
-    
-    $DEBUG sed -i "s/NEXT_RUN_ID=.*//" $CONFIG
-    $DEBUG sed -i "s/LAST_RUN_ID=.*//" $CONFIG
-    
+    set_config_value "BATCH_DATE" ""
+    set_config_value "JOB_IDS" ""
+    set_config_value "NEXT_RUN_ID" ""
+    set_config_value "LAST_RUN_ID" ""
+ 
     return 0
 }
 
@@ -578,62 +593,44 @@ report_mode() {
 
 #### SUBMIT MODE ####
 
-set_config_value() {
-PARAM=$1
-VALUE=$2
-
-if [[ $(grep $PARAM $CONFIG) ]]; then
-    $DEBUG sed -i "s/${PARAM}=.*/${PARAM}=${VALUE}/" $CONFIG
-else
-    $DEBUG echo "${PARAM}=${VALUE}" >> $CONFIG
-fi
-
-}
-
 submit_batch() {
-    if [[ -n $CONFIG ]]; then
-        config_arg="--config $CONFIG"
-    fi
-    
-    if [[ -z $BATCH_DIR ]]; then
-        BATCH_DIR=$PWD
-    fi
-    if [ -z $BATCH_NAME ]; then
-        BATCH_NAME=$(basename $BATCH_DIR)
-    fi
 
-    OUTPUT=$($DEBUG $SBATCH -D $BATCH_DIR --job-name="$BATCH_NAME" 
-                    $array_arg $reservation_arg
-                    $SBATCH_SCRIPT $SBATCH_SCRIPT_ARGS
-                    $NEXT_RUN_ID)
+    OUTPUT=$($DEBUG $SBATCH -D $BATCH_DIR ${SBATCH_ARGS[@]} $NEXT_RUN_ID)
 
     if [[ $? -ne 0 ]]; then
         echo ERROR: $OUTPUT
-        if [[ -n $NEXT_RUN_ID ]]; then
-            set_config_value "NEXT_RUN_ID" $NEXT_RUN_ID
-            set_config_value "LAST_RUN_ID" $LAST_RUN_ID
-        fi
         exit 1
     fi
 
+
     # read the new job number from the sbatch output
     echo $OUTPUT
-    IFS=" " read -ra split <<< "$OUTPUT"
-    job_id=${split[3]}
-
-    # create a report script -- only do this once
-    if [[ -z $CONFIG ]]; then
-        $DEBUG config_mode --create --jobdir $output_dir --jobname ${JOB_NAME} --jobids $job_id
+    if [[ -z $DEBUG ]]; then
+        IFS=" " read -ra split <<< "$OUTPUT"
+        job_id=${split[3]}
     else
-        $DEBUG config_mode --append --config $CONFIG --jobids $job_id
+        # print a blank placeholder if we are in debug mode
+        job_id="<job_id>"
     fi
-    
+
+    # append the job id to the script if it exists
+    if [[ -n $CONFIG ]]; then
+        set_config_value "JOB_IDS" $job_id
+        if [[ -n $NEXT_RUN_ID || -n $LAST_RUN_ID ]]; then
+            set_config_value "NEXT_RUN_ID" $NEXT_RUN_ID
+            set_config_value "LAST_RUN_ID" $LAST_RUN_ID
+        fi
+    fi
+   
+    return 0 
 }
 
 reserve_submit_batch() {
   curr_max_id=-1
   num_to_run=$RESERVE
 
+  parse_sacct_jobs
+  
   runs+=${PENDING[@]}
   runs+=${RUNNING[@]}
   runs+=${COMPLETED[@]}
@@ -703,9 +700,13 @@ reserve_submit_batch() {
         fi
     fi
   fi
+  if [[ ! $SBATCH_ARGS =~ "--array=" ]]; then
+      SBATCH_ARGS+=("--array=${ARRAY}")
+  fi
     
   echo "Submitting jobs $NEXT_RUN_ID - $LAST_RUN_ID as $ARRAY"
   submit_batch
+
 }
 
 submit_batch_jobs() {
@@ -713,7 +714,7 @@ submit_batch_jobs() {
         # use the RESERVE and MAX_ID to run the batch
         reserve_submit_batch
     else
-        echo "Submitting jobs $ARRAY"
+        echo "Submitting batch"
         submit_batch
     fi
 
@@ -726,15 +727,45 @@ submit_mode() {
         return 1
     fi
 
-    local opts="--config --sacct --sbatch"
+    SBATCH_ARGS=()
+    local opts="--batch_dir --batch_name --config --max_id --reserve --sacct --sbatch"
     while test $# -ne 0; do
         case $1 in
+        --batch_dir) shift
+            if [[ -z $1 || ! -e $1 ]]; then
+                usage "submit"
+                return 1
+            fi
+            BATCH_DIR=$(readlink -f $1)
+        ;;
+        --batch_name) shift
+            if [[ -z $1 ]]; then
+                usage "submit"
+                return 1
+            fi
+            BATCH_NAME=$1
+        ;;
         --config) shift
             if [[ -z $1 || ! -e $1 ]]; then
                 usage "submit"
                 return 1
             fi
             CONFIG=$(readlink -f $1)
+            source $CONFIG
+        ;;
+        --max_id) shift
+            if [[ -z $1 || ! $1 =~ [[:digit:]] ]]; then
+                usage "submit"
+                return 1
+            fi
+            MAXID=$1
+        ;;
+        --reserve) shift
+            if [[ -z $1 || ! $1 =~ [[:digit:]] ]]; then
+                usage "submit"
+                return 1
+            fi
+            RESERVE=$1
         ;;
         --sacct) shift
             while [[ -n $1 && ! $opts =~ $1 ]]; do
@@ -743,7 +774,7 @@ submit_mode() {
             done 
         ;;
         --sbatch) shift
-            while [[ -n $1 && ! $opts =~ $1 ]]; do        
+            while [[ -n $1 && ! $opts =~ $1 ]]; do 
                 SBATCH_ARGS+=($1)
                 shift
             done 
@@ -753,7 +784,42 @@ submit_mode() {
             return 1
         ;;        
         esac
+        shift
     done
+
+    # argument post processing
+    if [[ -z $BATCH_DIR ]]; then
+        # assume the currect directory is the batch dir if none provided
+        BATCH_DIR=$PWD
+    fi
+
+    if [[ -z $BATCH_NAME ]]; then
+        # find and use the --job-name from sbatch if provided
+        for val in ${SBATCH_ARGS[@]}; do
+            if [[ $val =~ "--job-name" ]]; then
+                IFS='=' read -ra split <<< "$val"
+                BATCH_NAME=${split[1]}
+                break
+            elif [[ $val =~ "-J" ]]; then
+                shift
+                BATCH_NAME=$1
+                break
+            fi
+        done
+
+        if [[ -z $BATCH_NAME ]]; then
+            # use the currect directory name as the batch name if none provided
+            BATCH_NAME=$(basename $BATCH_DIR)
+            SBATCH_ARGS+=("--job-name=${BATCH_NAME}")
+        fi
+    fi
+
+    if [[ -n $MAX_ID && -n $RESERVE ]]; then
+        # if --max_id and --reserve where used, create a config file
+        $DEBUG config_mode --create --batch_name $BATCH_NAME --batch_dir $BATCH_DIR
+        set_config_value "MAX_ID" $MAX_ID
+        set_config_value "RESERVE" $RESERVE
+    fi
 
     submit_batch_jobs
 

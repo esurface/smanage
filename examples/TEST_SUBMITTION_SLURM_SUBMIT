@@ -1,9 +1,7 @@
 RESERVE=30
 MAX_ID=30
 
-#partition=shared
-#reservation=esurface
+BATCH_DIR=/n/seage_lab/esurface/BWA_Calibration/simulations/Test_Submittion
+BATCH_NAME=Test_Submittion
 
-batch_dir=/n/seage_lab/esurface/BWA_Calibration/simulations/Test_Submittion
-batch_name=Test_Submittion
-batch_prefix=Bots_ART_v4_batch_
+SBATCH_ARGS=~/job_submittion/run_trans_model_batches-4.0.sh /n/seage_lab/model_versions/release/transm-v4.0.4 test/

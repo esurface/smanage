@@ -1,0 +1,4 @@
+CONFIG=/n/seage_lab/esurface/BWA_Calibration/simulations/ART_COMPARE/MULTI_ART/BWA_10K_CONFIG
+*/30 * * * * ~/smanage/smanage.sh submit --config $CONFIG
+10 */4 * * * ~/smanage/smanage.sh report --config $CONFIG
+

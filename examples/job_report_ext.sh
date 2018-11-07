@@ -4,12 +4,12 @@
 #
 # Use this script to add funtionality to the job_report script
 
+output_dir=$WORK_DIR
+prefix=batch_
+
 _ext_handle_completed() {
     runs=($@)
     num_runs=${#runs[@]}
-
-    output_dir=$WORK_DIR
-    prefix=batch_
 
     passed=()
     passed_runs=()
@@ -50,9 +50,7 @@ _ext_handle_completed() {
         printf "Passed Calibration: ${#passed[@]} jobs"
         printf ' @ %.1f%%\n' "$(echo "scale=2; 100 * ${#passed[@]} / $num_runs" | bc)"
         #run_times ${passed_runs[@]}
-        if [[ -n $JOBARRAY && -n $LIST ]]; then
-            print_sorted_jobs ${passed[@]}
-        fi
+        print_sorted_jobs ${passed[@]}
     fi
 }
 

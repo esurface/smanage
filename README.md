@@ -63,7 +63,7 @@ Rerun these jobs: 34,52
 
 The output for verbose commands can be extended to parse the .err or .out files to provided even more information using the 'SMANAGE_EXT_SOURCE' environment variable.
 
-## Submit Mode: smanage --submit
+## Submit Mode: smanage submit
 
 The smanage submit mode adds extra functionality to sbatch when submitting and tracking more jobs than the MaxArraySize allowed by slurm. 
 

@@ -595,15 +595,16 @@ report_mode() {
 
 submit_batch() {
 
-    echo "$SBATCH $ARRAY_ARG $BATCH_NAME_ARG ${SBATCH_ARGS[@]}"
+    echo "Submitting jobs: $SBATCH $ARRAY_ARG $BATCH_NAME_ARG ${SBATCH_ARGS[@]}"
 
-    OUTPUT=$($DEBUG $SBATCH $ARRAY_ARG $BATCH_NAME_ARG ${SBATCH_ARGS[@]})
+    if [[ -z $DEBUG ]]; then
+        OUTPUT=$($SBATCH $ARRAY_ARG $BATCH_NAME_ARG ${SBATCH_ARGS[@]})
+    fi
 
     if [[ $? -ne 0 ]]; then
         echo ERROR: $OUTPUT
         exit 1
     fi
-
 
     # read the new job number from the sbatch output
     # On success sbatch should return "Submitted batch job <job_id>"

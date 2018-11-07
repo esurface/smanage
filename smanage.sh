@@ -187,6 +187,7 @@ get_sorted_jobs() {
 			echo ${split[0]}
 		done | sort -nu
 		) )
+	pretty_print_commas ${sorted[@]}
 }
 
 # convert value of seconds to a time
@@ -199,16 +200,23 @@ convertsecs() {
 
 # use the SUBMIT, START, and END times from sacct to calculate
 # the average wall time and run time for a set of jobs
+# 10% of runs should be good enough for an average
 run_times() {
 	runs=($@)
 
 	sum_wall_time=0
 	sum_elapsed=0
+    
+    if [[ ${#runs[@]} -gt 10000 ]]; then 
+        sample_size=$((${#runs[@]} / 10 ))
+    else
+        sample_size=${#runs[@]}
+    fi
 
     local idx=0
-	for run in ${runs[@]}; do
+    for run in ${runs[@]}; do
         idx=$(($idx + 1))
-        if [[ $idx -gt 1000 ]]; then
+        if [[ $idx -gt $sample_size ]]; then
             break
         fi
 		IFS='|' read -ra split <<< "$run"
@@ -219,8 +227,8 @@ run_times() {
 		sum_wall_time=$((sum_wall_time + $(( $end_ - $submit_ )) ))
 	done
 
-	avg_elapsed=$(($sum_elapsed / ${#runs[@]}))
-	avg_wall_time=$(($sum_wall_time / ${#runs[@]}))
+	avg_elapsed=$(($sum_elapsed / $sample_size))
+	avg_wall_time=$(($sum_wall_time / $sample_size))
 
 	echo "	Avg Run Time: $(convertsecs $avg_elapsed)"
 	echo "	Avg Wall Time: $(convertsecs $avg_wall_time)"
@@ -272,7 +280,9 @@ parse_sacct_jobs() {
     if [[ ${#all[@]} -eq 0 ]]; then
 	    echo "No jobs found with these sacct args"
     else
-        echo "Jobs: $(get_sorted_jobs ${all[@]})"
+        if [[ ! ${SACCT_ARGS[@]} =~ "--jobs=" ]]; then
+            echo "Found jobs: $(get_sorted_jobs ${all[@]})"
+        fi
     fi
     
     # Split the job list by STATE
@@ -308,7 +318,6 @@ parse_sacct_jobs() {
 #### CONFIG MODE ####
 
 append_ids() {
-    source $CONFIG
     if [[ -z $JOB_IDS ]]; then
         # Add the job ids env var if missing
         set_config_value "JOB_IDS" $IDS
@@ -317,12 +326,6 @@ append_ids() {
         JOB_IDS=$(echo $JOB_IDS,$IDS)
         JOB_IDS=$(echo $JOB_IDS | tr , "\n" | sort | uniq | tr "\n" , ; echo )
         set_config_value "JOB_IDS" $JOB_IDS
-    fi
-
-    if [[ -z $BATCH_DATE ]]; then
-        # Add the job date if it is missing
-        BATCH_DATE="$(date +%Y-%m-%dT%H:%M)"
-        set_config_value "BATCH_DATE" $BATCH_DATE
     fi
 
 }
@@ -465,11 +468,10 @@ handle_failed() {
 	done
 
     echo "Rerun these jobs:"
-	pretty_print_tabs ${list[@]}
+	#pretty_print_tabs ${list[@]}
     print_sorted_jobs ${list[@]}
 
     if [[ $VERBOSE -eq 1 ]]; then
-	    run_times ${runs[@]}
 	    if [[ -n $SMANAGE_EXT_SOURCE ]]; then
             _ext_handle_failed ${runs[@]}
         fi
@@ -536,7 +538,6 @@ report_mode() {
                 return 1
             fi
             CONFIG=$(readlink -f $1)
-            shift
         ;;
         --sacct) shift
             while [[ -n $1 && ! $opts =~ $1 ]]; do
@@ -549,6 +550,7 @@ report_mode() {
             return 1
         ;;        
         esac
+        shift
     done
     
     parse_sacct_jobs
@@ -617,7 +619,7 @@ submit_batch() {
     # append the job id to the script if it exists
     if [[ -n $CONFIG ]]; then
         config_mode --append --config $CONFIG --job_ids $job_id
-        if [[ -n $NEXT_RUN_ID || -n $LAST_RUN_ID ]]; then
+        if [[ -z $ARRAY_ARG && -n $NEXT_RUN_ID && -n $LAST_RUN_ID ]]; then
             set_config_value "NEXT_RUN_ID" $NEXT_RUN_ID
             set_config_value "LAST_RUN_ID" $LAST_RUN_ID
         fi

@@ -65,7 +65,7 @@ The output for verbose commands can be extended to parse the .err or .out files 
 
 ## Submit Mode: smanage submit
 
-The smanage submit mode adds extra functionality to sbatch when submitting and tracking more jobs than the MaxArraySize allowed by slurm. 
+The smanage submit mode adds extra functionality to sbatch when submitting and tracking more jobs than the MaxArraySize allowed by slurm.
 
 For simple jobs, use the exact same arguments as when using sbatch. A batch name is required and is provided to smanage using the argument '--batch-name=' or by specifying the sbatch argument '--job-name='. A CONFIG file is not required and is not be created for these types of job submittions.
 
@@ -128,3 +128,27 @@ CONFIG=<path_to>/BATCH_JOB_CONFIG
 10 */4 * * * ~/smanage/smanage.sh report --config $CONFIG
 ```
 
+## Accessing variable in the CONFIG file in an sbatch script
+
+Some use cases require accessing variables in the CONFIG file in an sbatch script. smanage submit automatically appends the path to the CONFIG file as the last item to the sbatch arguments. Therefore the variables in the CONFIG file can be accessed in the sbatch script by reading them directly or using the bash 'source' command to load the variables. 
+
+This example reads the NEXT_RUN_ID variable from the CONFIG file and uses it to list the items in a directory.
+
+```
+#!/bin/bash
+#
+#SBATCH -p shared
+
+RUN_ID=$SLURM_ARRAY_TASK_ID
+if [[ $# -gt 0 ]]; then
+    LAST_ARG=${*: -1}
+    if [[ -n $LAST_ARG && -e $(readlink -f $LAST_ARG) ]]; then
+        CONFIG=$(readlink -f $LAST_ARG)
+        source $CONFIG
+        # the variable NEXT_RUN_ID now contains the value in the CONFIG file
+        RUN_ID=$(($NEXT_RUN_ID + $SLURM_ARRAY_TASK_ID))
+    fi
+fi
+
+ls batches/batch_dir_${RUN_ID}
+```

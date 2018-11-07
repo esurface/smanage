@@ -90,7 +90,6 @@ Submitting jobs: /usr/bin/sbatch --array=0-999 --job-name="BATCH_JOB" <sbatch_sc
 Submitted batch job <job_id_0>
 Appending <job_id_0> to BATCH_JOB_CONFIG
 ```
-```
 
 For this call, smanage creates a CONFIG file automatically. It can be used for subsequent calls to smanage submit.
 ```

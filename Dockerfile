@@ -1,5 +1,7 @@
 FROM alpine:3.8
 
+# docker build -t srcc/smanage .
+
 RUN apk add --no-cache bash && \
     mkdir -p /code
 

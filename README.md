@@ -44,6 +44,7 @@ without any extraneous for loops:
 #SBATCH -t 0-1:00 # Maximum execution time (D-HH:MM)
 #SBATCH -o cookie_%A_%a.out # Standard output
 #SBATCH -e cookie_%A_%a.err # Standard error
+#SBATCH --array=1-100   # maps 1 to 100 to SLURM_ARRAY_TASK_ID below
 
 /bin/bash "${SCRATCH}/cookies/cookie${SLURM_ARRAY_TASK_ID}".txt
 ```
@@ -69,9 +70,26 @@ This is the goal of smanage. Now that you understand, let's walk through usage.
 
 # Usage
 
+## Local
+
+For local usage, you can install the script by adding an alias to the program. First, wget it.
+
+```bash
+wget https://raw.githubusercontent.com/researchapps/smanage/master/smanage.sh
+chmod u+x smanage.sh # makes it executable
+```
+
+Run the following line of code or copy it into the file '~/.bashrc' to make it permanent:
+
+```bash
+alias smanage='<pathto>/smanage.sh'
+```
+
 ## Docker and Singularity
 
-To make installation easier, we've provided a [Docker container](https://cloud.docker.com/u/srcc/repository/docker/srcc/smanage) that can be pulled via Singularity to run on 
+While it might be a bit overkill, providing a container with the script
+will help somewhat with reproducibility, and might be a preferred option for some.
+Thus, we've provided a [Docker container](https://cloud.docker.com/u/srcc/repository/docker/srcc/smanage) that can be pulled via Singularity to run on 
 a cluster resource.
 
 ```bash
@@ -128,55 +146,87 @@ Define the env variable SMANAGE_EXT_SOURCE to add a script to parse the .err or 
 In the script, define a function called '_ext_handle_completed' that will be passed a bash list of jobs. See _ext_handle_example.
 ```
 
+Whether you install it locally or use a container, smanage has two basic modes described below.
+When you use the containerized version, don't forget all the binds to slurm
+and munge.
 
-## Local
+## Step 1. Write a Dummy Job
 
-For local usage, you can install the script by adding an alias to the program. 
-Run the following line of code or copy it into the file '~/.bashrc' to make it permanent:
+To really see how this works, we need to write a dummy job. Let's write one
+that will simply sleep for a bit, and exit. Here is our sbatch job file,
+called `sleepy.sbatch`.
 
 ```bash
-alias smanage='<pathto>/smanage.sh'
+#!/bin/bash
+#SBATCH -J sleepy-job
+#SBATCH -n 1
+#SBATCH -N 1
+#SBATCH -p owners
+#SBATCH --mem 1000
+#SBATCH -t 0-0:03
+#SBATCH --array=1-100   # maps 1 to 100 to SLURM_ARRAY_TASK_ID below
+
+echo "This is job number ${SLURM_ARRAY_TASK_ID}"
+sleep 120
 ```
 
-Whether you install it locally or use a container, smanage has two basic modes described below.
+We will launch this job like this:
 
+```bash
+sbatch sleepy.sbatch
+```
+
+and then use it to learn about the different commands for smanage below.
 
 ## Report Mode (default): smanage report
-The reporting mode parses the output from sacct to create more consise output for large sets of job runs. 
-The most useful example is to show the number of jobs in each state. The following is the output from a batch of 1000 jobs submitted using 'sacct --array' named "BATCH_JOBS":
 
-```
-$ smanage report --sacct --name=BATCH_JOBS
-Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
-8 COMPLETED jobs
-2 FAILED jobs
+The reporting mode gives you a summary of your jobs. Here is what we see after
+launching sleepy.sbatch above.
+
+```bash
+[vsochat@sh-ln06 login /scratch/users/vsochat/sleepy]$ smanage report
+Finding jobs using: /usr/bin/sacct -XP --noheader
+Found jobs: 35386489
+0 COMPLETED jobs
+0 FAILED jobs
 0 TIMEOUT jobs
-8 RUNNING jobs
-982 PENDING jobs
+0 RUNNING jobs
+51 PENDING jobs
+```
+We could have also used squeue:
+```bash
+[vsochat@sh-ln06 login /scratch/users/vsochat/sleepy]$ squeue -u vsochat
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+  35386489_[1-100]    owners sleepy-j  vsochat PD       0:00      1 (None)
 ```
 
-When using the report mode, any of the sacct commands can be added to generate a report on specific jobs. For example, to report the jobs ran on a specific date (note, on that date 1000 jobs named BATCH_JOBS ran to completion):
+How? It parses and summarized the output from sacct. 
+Now we can try the command and look specifically for our "sleepy-job" by name.
+Let's run the command again, so we get two sets of sleepy jobs.
 
 ```
-$ smanage report --sacct --name=BATCH_JOBS --starttime=2018-08-27
-Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
-1008 COMPLETED jobs
-2 FAILED jobs
+$ sbatch sleepy.job
+$ smanage report --sacct --name=sleepy-job
+Finding jobs using: /usr/bin/sacct -XP --noheader --name=sleepy-job
+Found jobs: 35386489,35386615
+100 COMPLETED jobs
+0 FAILED jobs
 0 TIMEOUT jobs
-8 RUNNING jobs
-982 PENDING jobs
+0 RUNNING jobs
+51 PENDING jobs
 ```
 
-Adding the '--verbose' flag adds more useful information about the jobs. When added to the example above and providing the sacct flag to only see COMPLETED jobs, the run time information is added to the output: 
-
+Now we see the first 100 completed, and the second batch are started up!
+Under the hood, this is using ` 'sacct --array' named "sleepy-job"`.
+If you are familiar with sacct, any sacct commands can be added to
+this command. For example, to report the jobs ran on a specific date,
+we might do this:
 
 ```
-$ smanage --verbose report --name=BATCH_JOBS --starttime=2018-08-27 --state=COMPLETED
-Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
-1008 COMPLETED jobs
-Avg Run Time: 02:14:15
-Avg Wall Time: 07:33:40
+$ smanage report --sacct --name=sleepy-job --starttime=2019-01-07
 ```
+
+You can also add the '--verbose' flag to add more useful information about the jobs.
 
 When looking at FAILED jobs, providing a path to the directory where the .err files are for the run prints the errors for these jobs and a list of jobs to rerun (for easy copy and paste into your next 'sbatch --array' or 'smanage --submit' call):
 

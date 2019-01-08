@@ -4,7 +4,7 @@
 # Slurm Manage, for submitting and reporting on job arrays run on slurm
 #
 # MIT License
-# Copyright (c) 2018 Erik Surface
+# Copyright (c) 2018-2019 Erik Surface
 #
 
 #### SMANAGE_EXT_SOURCE ####

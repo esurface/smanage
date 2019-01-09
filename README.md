@@ -61,7 +61,7 @@ Job 52 Failed: "ls: ~/myjobdir/: No such file or directory"
 Rerun these jobs: 34,52
 ```
 
-The output for verbose commands can be extended to parse the .err or .out files to provided even more information using the 'SMANAGE_EXT_SOURCE' environment variable.
+The output for verbose commands can be extended to parse the .err or .out files to provided even more information using the 'SMANAGE_EXT_SOURCE' environment variable. Define the env variable SMANAGE_EXT_SOURCE to add a script to parse the .err or .out files. In the script, define a function called '_ext_handle_completed' that will be passed a bash list of jobs. See _ext_handle_example.
 
 ## Submit Mode: smanage submit
 

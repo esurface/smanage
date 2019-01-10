@@ -75,7 +75,7 @@ This is the goal of smanage. Now that you understand, let's walk through usage.
 For local usage, you can install the script by adding an alias to the program. First, wget it.
 
 ```bash
-wget https://raw.githubusercontent.com/researchapps/smanage/master/smanage.sh
+wget https://raw.githubusercontent.com/esurface/smanage/master/smanage.sh
 chmod u+x smanage.sh # makes it executable
 ```
 
@@ -84,6 +84,8 @@ Run the following line of code or copy it into the file '~/.bashrc' to make it p
 ```bash
 alias smanage='<pathto>/smanage.sh'
 ```
+
+Now skip forward to usage to learn how to interact with smanage.
 
 ## Docker and Singularity
 
@@ -186,21 +188,24 @@ launching sleepy.sbatch above.
 ```bash
 [vsochat@sh-ln06 login /scratch/users/vsochat/sleepy]$ smanage report
 Finding jobs using: /usr/bin/sacct -XP --noheader
-Found jobs: 35386489
+Found jobs: 35512888
 0 COMPLETED jobs
 0 FAILED jobs
 0 TIMEOUT jobs
-0 RUNNING jobs
-51 PENDING jobs
+98 RUNNING jobs
+0 PENDING jobs
+
+2 jobs with untracked status
 ```
 We could have also used squeue:
+
 ```bash
 [vsochat@sh-ln06 login /scratch/users/vsochat/sleepy]$ squeue -u vsochat
              JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
   35386489_[1-100]    owners sleepy-j  vsochat PD       0:00      1 (None)
 ```
 
-How? It parses and summarized the output from sacct. 
+How does the first commad work? It parses and summarized the output from sacct. 
 Now we can try the command and look specifically for our "sleepy-job" by name.
 Let's run the command again, so we get two sets of sleepy jobs.
 
@@ -228,10 +233,16 @@ $ smanage report --sacct --name=sleepy-job --starttime=2019-01-07
 
 You can also add the '--verbose' flag to add more useful information about the jobs.
 
+```
+$ smanage --verbose report --sacct --name=sleepy-job --verbose --state=COMPLETED
+```
+
+## Reporting Errors
+
 When looking at FAILED jobs, providing a path to the directory where the .err files are for the run prints the errors for these jobs and a list of jobs to rerun (for easy copy and paste into your next 'sbatch --array' or 'smanage --submit' call):
 
-```
-$ smanage --verbose report --name=BATCH_JOBS --starttime=2018-08-27 --state=FAILED
+```bash
+$ smanage --verbose report --name=sleepy-job --state=FAILED
 Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
 2 FAILED jobs
 Job 34 Failed: "ls: ~/myjobdir/: No such file or directory"
@@ -247,7 +258,7 @@ The smanage submit mode adds extra functionality to sbatch when submitting and t
 
 For simple jobs, use the exact same arguments as when using sbatch. A batch name is required and is provided to smanage using the argument '--batch-name=' or by specifying the sbatch argument '--job-name='. A CONFIG file is not required and is not be created for these types of job submittions.
 
-```
+```bash
 $ smanage submit --sbatch --job-name="BATCH_JOB" <sbatch_script> <sbatch_script_args>
 Submitting batch
 Submitting jobs: /usr/bin/sbatch --job-name="BATCH_JOB" <sbatch_script> <sbatch_script_args>

@@ -4,7 +4,7 @@
 # Slurm Manage, for submitting and reporting on job arrays run on slurm
 #
 # MIT License
-# Copyright (c) 2018-2019 Erik Surface
+# Copyright (c) 2018 Erik Surface
 #
 
 #### SMANAGE_EXT_SOURCE ####
@@ -501,12 +501,25 @@ handle_pending() {
 	runs=($@)
 
 	list=()
-	for run in ${runs[@]}; do
-		IFS='|' read -ra split <<< "$run"
+    num_pending=0
+    for run in ${runs[@]}; do
+        IFS='|' read -ra split <<< "$run"
 		list+=(${split[$JOBID]})
+        IFS='_' read -ra job <<< "${split[$JOBID]}"
+        jobstep=${job[$JOBSTEP]}
+        # Pending jobs may look like [###-###]
+        if [[ $jobstep =~ ^(\[)([[:digit:]]+)-([[:digit:]]+)(\])$ ]]; then
+            # Get how many are pending
+            leftjobstep=( $(echo "$jobstep" | tr -d '[[:alpha:]]' | cut -d '-' -f 1) )
+            rightjobstep=( $(echo "$jobstep" | tr -d '[[:alpha:]]' | cut -d '-' -f 2) )
+            num_pending=$((num_pending + rightjobstep - leftjobstep))
+        else
+            num_pending=$((num_ending + 1))
+        fi
 	done
+    echo "${num_pending} PENDING jobs"
 
-	if [ $VERBOSE -eq 1 ]; then
+	if [[ $num_pending > 0 && $VERBOSE -eq 1 ]]; then
 	    echo "Pending jobs: "
 	    pretty_print_tabs ${list[@]}
 	fi
@@ -575,11 +588,8 @@ report_mode() {
         handle_running ${RUNNING[@]}
     fi
     
-    echo "${#PENDING[@]} PENDING jobs"
-    if [[ ${#PENDING[@]} > 0 && $VERBOSE -eq 1 ]]; then
-        handle_pending ${PENDING[@]}
-    fi
-    
+    handle_pending ${PENDING[@]}
+ 
     if [[ ${#OTHER[@]} > 0 ]]; then
     	echo "${#OTHER[@]} jobs with untracked status"
     	if [[ $VERBOSE -eq 1 ]]; then

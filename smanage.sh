@@ -251,6 +251,7 @@ fi
 COMPLETED=()
 FAILED=()
 TIMEOUT=()
+CANCELLED=()
 RUNNING=()
 PENDING=()
 OTHER=()
@@ -284,8 +285,7 @@ parse_sacct_jobs() {
     fi
     
     # Split the job list by STATE
-    echo "${all[@]}" | while IFS=$'\n' read -r line; do
-    #for run in "${all[@]}"; do
+    for run in "${all[@]}"; do
 	    IFS='|' read -ra split <<< "$run" # split the sacct line by '|'
         state=${split[$JOBSTATE]}
         if [[ $EXCLUDE -eq 1 ]]; then
@@ -296,7 +296,7 @@ parse_sacct_jobs() {
 			    continue
 		    fi
 	    fi
-    
+ 
         if [[ $state = "COMPLETED" ]]; then
             COMPLETED+=($run)
         elif [[ $state = "FAILED" ]]; then
@@ -305,6 +305,8 @@ parse_sacct_jobs() {
             TIMEOUT+=($run)
         elif [[ $state = "RUNNING" ]]; then
             RUNNING+=($run)
+        elif [[ $state =~ "CANCELLED" ]]; then
+            CANCELLED+=("$run")
         elif [[ $state = "PENDING" ]]; then
             PENDING+=($run)
         else
@@ -576,18 +578,24 @@ report_mode() {
     	handle_failed ${FAILED[@]}
     fi
     
-    echo "${#TIMEOUT[@]} TIMEOUT jobs"
-    if [[ ${#TIMEOUT[@]} > 0 && $VERBOSE -eq 1 ]]; then
-        handle_failed ${TIMEOUT[@]}
+    if [[ ${#TIMEOUT[@]} > 0 ]]; then
+        echo "${#TIMEOUT[@]} TIMEOUT jobs"
+    	if [[ $VERBOSE -eq 1 ]]; then
+            handle_failed ${TIMEOUT[@]}
+        fi
     fi
-    
+ 
+    if [[ ${#CANCELLED[@]} > 0 ]]; then
+        echo "${#CANCELLED[@]} CANCELLED jobs"
+    fi
+
     echo "${#RUNNING[@]} RUNNING jobs"
     if [[ ${#RUNNING[@]} > 0 && $VERBOSE -eq 1 ]]; then
         handle_running ${RUNNING[@]}
     fi
     
     handle_pending ${PENDING[@]}
- 
+
     if [[ ${#OTHER[@]} > 0 ]]; then
     	echo "${#OTHER[@]} jobs with untracked status"
     	if [[ $VERBOSE -eq 1 ]]; then

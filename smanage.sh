@@ -172,10 +172,10 @@ print_sorted_jobs() {
 
 # get the list of jobs
 get_sorted_jobs() {
-	runs=($@)
+    runs=("$@")
 
-	list=()
-	for run in ${runs[@]}; do
+    list=()
+    for run in "${runs[@]}"; do
 		IFS='|' read -ra split <<< "$run"
 		jobid=${split[$JOBID]}
 		list+=($jobid)
@@ -280,13 +280,12 @@ parse_sacct_jobs() {
     if [[ ${#all[@]} -eq 0 ]]; then
 	    echo "No jobs found with these sacct args"
     else
-        if [[ ! ${SACCT_ARGS[@]} =~ "--jobs=" ]]; then
-            echo "Found jobs: $(get_sorted_jobs ${all[@]})"
-        fi
+        echo "Found ${#all[@]} jobs: $(get_sorted_jobs "${all[@]}")"
     fi
     
     # Split the job list by STATE
-    for run in ${all[@]}; do
+    echo "${all[@]}" | while IFS=$'\n' read -r line; do
+    #for run in "${all[@]}"; do
 	    IFS='|' read -ra split <<< "$run" # split the sacct line by '|'
         state=${split[$JOBSTATE]}
         if [[ $EXCLUDE -eq 1 ]]; then
@@ -522,9 +521,8 @@ handle_pending() {
 	if [[ $num_pending > 0 && $VERBOSE -eq 1 ]]; then
 	    echo "Pending jobs: "
 	    pretty_print_tabs ${list[@]}
+	    echo ""
 	fi
-
-	echo ""
 }
 
 handle_other() {

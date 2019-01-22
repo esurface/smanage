@@ -187,7 +187,18 @@ get_sorted_jobs() {
 			echo ${split[0]}
 		done | sort -nu
 		) )
-	pretty_print_commas ${sorted[@]}
+    last=$((${#sorted[@]} - 1))
+	if [[ $VERBOSE -eq 1 ]]; then
+        # print all jobs in tab format
+        echo ""
+        echo "$(pretty_print_tabs ${sorted[@]})"
+    elif [[ ${#sorted[@]} -gt 10 ]]; then
+        # print a shortened list of jobs
+        echo "$(pretty_print_commas ${sorted[@]:0:9}) (and more)"
+    else
+        # print the list of jobs
+        pretty_print_commas ${sorted[@]}
+    fi
 }
 
 # convert value of seconds to a time

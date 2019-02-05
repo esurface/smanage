@@ -1,59 +1,248 @@
 # smanage
+
 Slurm Manage, for submitting and reporting on job arrays run on slurm
 
 The script manages jobs running on a compute cluster that uses the [SLURM scheduler](https://slurm.schedmd.com/). 
 It was developed in bash to take advantage of the automatic output from the [slurm programs available on the command line](https://slurm.schedmd.com/pdfs/summary.pdf), namely sacct and sbatch. As a key feature, smanage enables the user to submit and track large batches of jobs beyond the MaxArraySize limit set by slurm. 
 
-The easiest way to install the script by adding an alias to the program. Run the following line of code or copy it into the file '~/.bashrc' to make it perminant:
+## What is a job array?
+
+If you are used to submitting jobs on a SLURM cluster, you are probably used to the
+standard sbatch command:
+
+```bash
+$ sbatch myanalysis.job
 ```
+
+If you are like me, you've probably written some kind of Python/R/Bash or other
+script that loops through some set of variables and programmatically
+generates and/or submits job files. [Here is an example](https://github.com/vsoch/image-comparison-thresholding/blob/master/preprocessing/run_make_group_maps.py#L19).
+of some of the nonsense that I (contributor @vsoch) went through in graduate school.
+If only I had known about job arrays!
+
+> a job array lets you submit a ton of similar jobs using a template script.
+
+Actually, it's just another SBATCH header. It looks like this:
+
+```bash
+#A job array with index values of 1, 2, 5, 19, 27:
+#SBATCH --array=1,2,5,19,27
+```
+
+How would we use this? Let's start with a simple example, and say that we have
+100 text files to process. We have them in a folder, and they are labeled 
+cookie1.txt through cookie100.txt. We could use arrays to process these files
+without any extraneous for loops:
+
+```bash
+#!/bin/bash
+#SBATCH -J cookies-job # A single job name for the array
+#SBATCH -n 1 # One Core
+#SBATCH -N 1 # All cores on one machine
+#SBATCH -p owners # Partition name
+#SBATCH --mem 2000 # Memory (2Gb)
+#SBATCH -t 0-1:00 # Maximum execution time (D-HH:MM)
+#SBATCH -o cookie_%A_%a.out # Standard output
+#SBATCH -e cookie_%A_%a.err # Standard error
+#SBATCH --array=1-100   # maps 1 to 100 to SLURM_ARRAY_TASK_ID below
+
+/bin/bash "${SCRATCH}/cookies/cookie${SLURM_ARRAY_TASK_ID}".txt
+```
+
+We would then submit that one job file, and 100 jobs would be run to process our
+cookie text files!
+
+```bash
+sbatch cookie-job.sbatch
+```
+
+That's the essense of a job array. It's actually exactly as it sounds - an array
+of jobs.
+
+## Why a tool like smanage?
+
+Once you launch your jobs, you lose them to some extent because they are all individual.
+jobs. There are technically command line ways to interact and control them, but
+it's yet another hard-to-learn thing and (wouldn't it be nice) if there was a tool
+to manage arrays for us?
+
+This is the goal of smanage. Now that you understand, let's walk through usage.
+
+# Usage
+
+## Local
+
+For local usage, you can install the script by adding an alias to the program. First, wget it.
+
+```bash
+wget https://raw.githubusercontent.com/esurface/smanage/master/smanage.sh
+chmod u+x smanage.sh # makes it executable
+```
+
+Run the following line of code or copy it into the file '~/.bashrc' to make it permanent:
+
+```bash
 alias smanage='<pathto>/smanage.sh'
 ```
 
-The script has two basic modes described below.
+Now skip forward to usage to learn how to interact with smanage.
 
+## Docker and Singularity
 
+While it might be a bit overkill, providing a container with the script
+will help somewhat with reproducibility, and might be a preferred option for some.
+Thus, we've provided a [Docker container](https://cloud.docker.com/u/srcc/repository/docker/srcc/smanage) that can be pulled via Singularity to run on 
+a cluster resource.
+
+```bash
+$ singularity pull docker://srcc/smanage
+WARNING: Authentication token file not found : Only pulls of public images will succeed
+INFO:    Starting build...
+Getting image source signatures
+Copying blob sha256:cd784148e3483c2c86c50a48e535302ab0288bebd587accf40b714fffd0646b3
+ 2.10 MiB / 2.10 MiB [======================================================] 0s
+Copying blob sha256:596816525d28fa4a320d55ac0936959d3aa1384c7e73c7a5dbc822fa70a7b9ed
+ 1.12 MiB / 1.12 MiB [======================================================] 0s
+Copying blob sha256:36855b2d163c3615c90b416f8a316479bfe5fa4ac017a1d01da83d490c3d4739
+ 5.71 KiB / 5.71 KiB [======================================================] 0s
+Copying blob sha256:56bf999a378723585d47346d0d44bd74c006d3e62085d8858f2a19f1901cfeac
+ 5.71 KiB / 5.71 KiB [======================================================] 0s
+Copying config sha256:abf632e5ff9f35ae59c85a636c3429dbcc78df9b198f0daecd0720689c1dca0c
+ 1.33 KiB / 1.33 KiB [======================================================] 0s
+Writing manifest to image destination
+Storing signatures
+INFO:    Creating SIF file...
+INFO:    Build complete: smanage_latest.sif
+```
+
+Once you have it, try running the container to see its usage. We also need to bind
+the /bin/scontrol executable and other libraries to the container so it can interact with our cluster.
+
+```bash
+$ singularity run --bind /usr/bin/scontrol --bind /etc/slurm --bind /etc/munge --bind /var/run/munge smanage_dev.sif
+usage: smanage [FLAGS] <MODE> [MODE_ARGS]
+
+FLAGS:
+-a|--array:  Signal that jobs to report on are from sbatch --array
+-h|--help:   Show help messages. For a specific mode try, --help <MODE>
+-d|--debug:  Run smanage in debug mode (performs a dry-run of slurm commands)
+-v|--verbose: Print more information at each step
+
+MODE: 
+report (default): output information on jobs reported by an sacct call
+submit: provided an sbatch script to to submit an array of jobs
+config: Convenience function to create, reset or append to a config file
+
+SACCT_ARGS:
+Specify which sacct arguments to call using the '--sacct' flag followed
+by any valid sacct arguments
+They can also be passed by setting SACCT_ARGS as an environment variable 
+
+SBATCH_ARGS:
+For submit mode, specify the sbatch argument using the '--sbatch' flag followed
+by any valid sbatch arguments including the sbatch submit script.
+They can also be passed by setting SBATCH_ARGS as an environment variable.
+
+SMANAGE_EXT_SOURCE:
+Define the env variable SMANAGE_EXT_SOURCE to add a script to parse the .err or .out files
+In the script, define a function called '_ext_handle_completed' that will be passed a bash list of jobs. See _ext_handle_example.
+```
+
+Whether you install it locally or use a container, smanage has two basic modes described below.
+When you use the containerized version, don't forget all the binds to slurm
+and munge.
+
+## Step 1. Write a Dummy Job
+
+To really see how this works, we need to write a dummy job. Let's write one
+that will simply sleep for a bit, and exit. Here is our sbatch job file,
+called `sleepy.sbatch`.
+
+```bash
+#!/bin/bash
+#SBATCH -J sleepy-job
+#SBATCH -n 1
+#SBATCH -N 1
+#SBATCH -p owners
+#SBATCH --mem 1000
+#SBATCH -t 0-0:03
+#SBATCH --array=1-100   # maps 1 to 100 to SLURM_ARRAY_TASK_ID below
+
+echo "This is job number ${SLURM_ARRAY_TASK_ID}"
+sleep 120
+```
+
+We will launch this job like this:
+
+```bash
+sbatch sleepy.sbatch
+```
+
+and then use it to learn about the different commands for smanage below.
 
 ## Report Mode (default): smanage report
-The reporting mode parses the output from sacct to create more consise output for large sets of job runs. 
-The most useful example is to show the number of jobs in each state. The following is the output from a batch of 1000 jobs submitted using 'sacct --array' named "BATCH_JOBS":
 
-```
-$ smanage report --sacct --name=BATCH_JOBS
-Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
-8 COMPLETED jobs
-2 FAILED jobs
+The reporting mode gives you a summary of your jobs. Here is what we see after
+launching sleepy.sbatch above.
+
+```bash
+[vsochat@sh-ln06 login /scratch/users/vsochat/sleepy]$ smanage report
+Finding jobs using: /usr/bin/sacct -XP --noheader
+Found jobs: 35512888
+0 COMPLETED jobs
+0 FAILED jobs
 0 TIMEOUT jobs
-8 RUNNING jobs
-982 PENDING jobs
+98 RUNNING jobs
+0 PENDING jobs
+
+2 jobs with untracked status
+```
+We could have also used squeue:
+
+```bash
+[vsochat@sh-ln06 login /scratch/users/vsochat/sleepy]$ squeue -u vsochat
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+  35386489_[1-100]    owners sleepy-j  vsochat PD       0:00      1 (None)
 ```
 
-When using the report mode, any of the sacct commands can be added to generate a report on specific jobs. For example, to report the jobs ran on a specific date (note, on that date 1000 jobs named BATCH_JOBS ran to completion):
+How does the first commad work? It parses and summarized the output from sacct. 
+Now we can try the command and look specifically for our "sleepy-job" by name.
+Let's run the command again, so we get two sets of sleepy jobs.
 
 ```
-$ smanage report --sacct --name=BATCH_JOBS --starttime=2018-08-27
-Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
-1008 COMPLETED jobs
-2 FAILED jobs
+$ sbatch sleepy.job
+$ smanage report --sacct --name=sleepy-job
+Finding jobs using: /usr/bin/sacct -XP --noheader --name=sleepy-job
+Found jobs: 35386489,35386615
+100 COMPLETED jobs
+0 FAILED jobs
 0 TIMEOUT jobs
-8 RUNNING jobs
-982 PENDING jobs
+0 RUNNING jobs
+51 PENDING jobs
 ```
 
-Adding the '--verbose' flag adds more useful information about the jobs. When added to the example above and providing the sacct flag to only see COMPLETED jobs, the run time information is added to the output: 
-
+Now we see the first 100 completed, and the second batch are started up!
+Under the hood, this is using ` 'sacct --array' named "sleepy-job"`.
+If you are familiar with sacct, any sacct commands can be added to
+this command. For example, to report the jobs ran on a specific date,
+we might do this:
 
 ```
-$ smanage --verbose report --name=BATCH_JOBS --starttime=2018-08-27 --state=COMPLETED
-Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
-1008 COMPLETED jobs
-Avg Run Time: 02:14:15
-Avg Wall Time: 07:33:40
+$ smanage report --sacct --name=sleepy-job --starttime=2019-01-07
 ```
+
+You can also add the '--verbose' flag to add more useful information about the jobs.
+
+```
+$ smanage --verbose report --sacct --name=sleepy-job --verbose --state=COMPLETED
+```
+
+## Reporting Errors
 
 When looking at FAILED jobs, providing a path to the directory where the .err files are for the run prints the errors for these jobs and a list of jobs to rerun (for easy copy and paste into your next 'sbatch --array' or 'smanage --submit' call):
 
-```
-$ smanage --verbose report --name=BATCH_JOBS --starttime=2018-08-27 --state=FAILED
+```bash
+$ smanage --verbose report --name=sleepy-job --state=FAILED
 Finding jobs using: /usr/bin/sacct -XP --noheader --name=BATCH_JOBS
 2 FAILED jobs
 Job 34 Failed: "ls: ~/myjobdir/: No such file or directory"
@@ -69,7 +258,7 @@ The smanage submit mode adds extra functionality to sbatch when submitting and t
 
 For simple jobs, use the exact same arguments as when using sbatch. A batch name is required and is provided to smanage using the argument '--batch-name=' or by specifying the sbatch argument '--job-name='. A CONFIG file is not required and is not be created for these types of job submittions.
 
-```
+```bash
 $ smanage submit --sbatch --job-name="BATCH_JOB" <sbatch_script> <sbatch_script_args>
 Submitting batch
 Submitting jobs: /usr/bin/sbatch --job-name="BATCH_JOB" <sbatch_script> <sbatch_script_args>
@@ -151,4 +340,12 @@ if [[ $# -gt 0 ]]; then
 fi
 
 ls batches/batch_dir_${RUN_ID}
+```
+
+# Development
+
+To build the Docker container locally:
+
+```bash
+$ docker build -t srcc/smanage .
 ```

@@ -474,8 +474,6 @@ config_mode() {
 handle_completed() {
 	runs=($@)
 
-    run_times ${runs[@]}
-
     if [[ -n $SMANAGE_EXT_SOURCE ]]; then
         _ext_handle_completed ${runs[@]}
     fi
@@ -593,6 +591,7 @@ report_mode() {
     parse_sacct_jobs
     
     echo "${#COMPLETED[@]} COMPLETED jobs"
+    run_times ${COMPLETED[@]}
     if [[ ${#COMPLETED[@]} > 0 && $VERBOSE -eq 1 ]]; then
         handle_completed ${COMPLETED[@]}
     fi

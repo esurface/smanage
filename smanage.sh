@@ -115,6 +115,8 @@ MaxArraySize=$(/usr/bin/scontrol show config | sed -n '/^MaxArraySize/s/.*= *//p
 # Required SACCT arguments and idexes to them
 SACCT_ARGS+=("-XP --noheader") 
 export SACCT_FORMAT='jobid,state,partition,submit,start,end,jobidraw'
+
+export SLURM_TIME_FORMAT="%s"
 JOBID=0			# get the jobid from jobid_jobstep
 JOBSTEP=1		# get the jobstep from jobid_jobstep
 JOBSTATE=1		# Job state
@@ -231,11 +233,13 @@ run_times() {
             break
         fi
 		IFS='|' read -ra split <<< "$run"
-		submit_=$(date --date=${split[$SUBMIT_TIME]} +%s )
-		start_=$(date --date=${split[$START_TIME]} +%s )
-		end_=$(date --date=${split[$END_TIME]} +%s )
-		sum_elapsed=$(( sum_elapsed + $(( $end_ - $start_ )) ))
-		sum_wall_time=$((sum_wall_time + $(( $end_ - $submit_ )) ))
+		submit_=${split[$SUBMIT_TIME]}
+		start_=${split[$START_TIME]}
+		end_=${split[$END_TIME]}
+        elapsed=$(( end_ - start_ ))
+        wall_time=$(( end_ - submit_ ))
+		sum_elapsed=$(( sum_elapsed + elapsed ))
+		sum_wall_time=$((sum_wall_time + wall_time ))
 	done
 
 	avg_elapsed=$(($sum_elapsed / $sample_size))

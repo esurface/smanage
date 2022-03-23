@@ -278,6 +278,8 @@ PENDING=()
 REQUEUED=()
 OTHER=()
 
+NUM_FINISHED_JOBS=0
+
 parse_sacct_jobs() {
    
     if [[ -n $CONFIG ]]; then
@@ -321,14 +323,18 @@ parse_sacct_jobs() {
  
         if [[ $state = "COMPLETED" ]]; then
             COMPLETED+=($run)
+            NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
         elif [[ $state = "FAILED" ]]; then
             FAILED+=($run)
+            NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
         elif [[ $state = "TIMEOUT" ]]; then
             TIMEOUT+=($run)
+            NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
         elif [[ $state = "RUNNING" ]]; then
             RUNNING+=($run)
         elif [[ $state =~ "CANCELLED" ]]; then
             CANCELLED+=("$run")
+            NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
         elif [[ $state = "PENDING" ]]; then
             PENDING+=($run)
         elif [[ $state = "REQUEUED" ]]; then
@@ -547,6 +553,11 @@ handle_pending() {
 	    pretty_print_tabs ${list[@]}
 	    echo ""
 	fi
+    num_requeued_jobs=${#REQUEUED[@]}
+    num_running_jobs=${#RUNNING[@]}
+    num_waiting_jobs=$((num_requeued_jobs+num_pending))
+    num_all_jobs=$((NUM_FINISHED_JOBS+num_waiting_jobs+num_running_jobs))
+    echo "Finished $((100*NUM_FINISHED_JOBS/num_all_jobs))% of ${num_all_jobs} jobs"
 }
 
 handle_other() {

@@ -134,7 +134,8 @@ pretty_print_tabs() {
 	count=1
 	mod=5
 	for l in ${list[@]}; do
-		printf "\t$l"
+		printf "\t"
+		echo -n "$l"
 		if (( $count % $mod == 0 )); then
 			printf "\n"
 		fi
@@ -150,7 +151,7 @@ pretty_print_commas() {
 
 	count=0
 	for l in ${list[@]}; do
-		printf "$l"
+		echo -n "$l"
 		((count+=1))
 		if (( $count < ${#list[@]} )); then
 			printf ","
@@ -166,8 +167,8 @@ print_sorted_jobs() {
     sorted=( $(
 		for l in ${list[@]}; do
 			IFS='_' read -ra split <<< "$l"
-			echo ${split[1]}
-		done | sort -nu
+			echo ${split[0]}_${split[1]}
+		done | sort -n | uniq
 		) )
 	pretty_print_commas ${sorted[@]}
 }
@@ -187,7 +188,7 @@ get_sorted_jobs() {
 		for l in ${list[@]}; do
 			IFS='_' read -ra split <<< "$l"
 			echo ${split[0]}
-		done | sort -nu
+		done | sort -n | uniq
 		) )
     last=$((${#sorted[@]} - 1))
 	if [[ $VERBOSE -eq 1 ]]; then

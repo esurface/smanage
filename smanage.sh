@@ -115,10 +115,10 @@ MaxArraySize=$(/usr/bin/scontrol show config | sed -n '/^MaxArraySize/s/.*= *//p
 
 # Required SACCT arguments and idexes to them
 SACCT_ARGS+=("-XP --noheader") 
-export SACCT_FORMAT='jobid,state,partition,submit,start,end,jobidraw'
+export SACCT_FORMAT='jobid,state,partition,submit,start,end,jobidraw,reason'
 declare -a SQUEUE_ARGS
 SQUEUE_ARGS+=("-h") 
-export SQUEUE_FORMAT='%i|%T|%P|%V|%S|%e|%A'
+export SQUEUE_FORMAT='%i|%T|%P|%V|%S|%e|%A|%r'
 
 export SLURM_TIME_FORMAT="%s"
 
@@ -132,6 +132,8 @@ PARTITION=2		# Where is the job running?
 SUBMIT_TIME=3		# Submit time
 START_TIME=4		# Start time
 END_TIME=5		# End time
+JOB_ID_RAW=6    # Raw Job ID
+REASON=7        # Reason why job failed or is pending
 
 #### Helper funtions for printing ####
 
@@ -625,6 +627,7 @@ handle_pending() {
 
 	list=()
     num_pending=0
+    declare -a run_counts
     for run in ${runs[@]}; do
         IFS='|' read -ra split <<< "$run"
 		list+=(${split[$JOBID]})
@@ -639,8 +642,11 @@ handle_pending() {
         fi
         # Get how many are pending
         num_pending=$((num_pending + step_size))
+        run_counts+=($step_size "$run")
 	done
     echo "${num_pending} PENDING jobs"
+
+    print_reasons ${run_counts[@]}
 
 	if [[ $num_pending > 0 && $VERBOSE -eq 1 ]]; then
 	    echo "Pending jobs: "
@@ -670,6 +676,38 @@ handle_other() {
 	done
 	pretty_print_tabs ${list[@]}
 }
+
+print_reasons() {
+	runs=($@)
+    declare -A reasons
+
+    count=0
+    for run in ${runs[@]}; do
+        if [ $count = 0 ]; then
+            count=$run
+            continue
+        fi
+    	IFS='|' read -ra split <<< "$run"
+    	reason=${split[$REASON]}
+        if [ "$reason" = "None" ] || [ -z "$reason" ]; then continue; fi
+        if [ ${reasons[$reason]+_} ]; then
+            reasons[$reason]=$((${reasons[$reason]}+count))
+        else
+            reasons[$reason]=$count
+        fi
+        count=0
+    done
+
+    if [ ${#reasons[@]} -gt 0 ]; then
+        echo -n "	Reasons: "
+        for reason in ${!reasons[@]}; do
+            echo -n "${reasons[$reason]} $reason, "
+        done
+        echo
+    fi
+}
+
+
 
 report_mode() {
     local opts="--config --sacct --squeue --both"
@@ -722,6 +760,13 @@ report_mode() {
     fi
     
     echo "${#FAILED[@]} FAILED jobs"
+
+    declare -a failed
+    for f in ${FAILED[@]}; do
+        failed+=(1 "$f")
+    done
+    print_reasons ${failed[@]}
+
     if [[ ${#FAILED[@]} > 0 && $VERBOSE -eq 1 ]]; then
     	handle_failed ${FAILED[@]}
     fi

@@ -220,6 +220,8 @@ run_times() {
 
 	sum_wall_time=0
 	sum_elapsed=0
+    max_wall_time=0
+    max_elapsed=0
     
     if [[ ${#runs[@]} -gt 10000 ]]; then 
         sample_size=$((${#runs[@]} / 10 ))
@@ -241,6 +243,8 @@ run_times() {
         wall_time=$(( end_ - submit_ ))
 		sum_elapsed=$(( sum_elapsed + elapsed ))
 		sum_wall_time=$((sum_wall_time + wall_time ))
+        ((elapsed > max_elapsed)) && max_elapsed=$elapsed
+        ((wall_time > max_wall_time)) && max_wall_time=$wall_time
 	done
 
 	avg_elapsed=$(($sum_elapsed / $sample_size))
@@ -248,6 +252,8 @@ run_times() {
 
 	echo "	Avg Run Time: $(convertsecs $avg_elapsed)"
 	echo "	Avg Wall Time: $(convertsecs $avg_wall_time)"
+	echo "	Max Run Time: $(convertsecs $max_elapsed)"
+	echo "	Max Wall Time: $(convertsecs $max_wall_time)"
 }
 
 set_config_value() {

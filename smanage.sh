@@ -275,6 +275,7 @@ TIMEOUT=()
 CANCELLED=()
 RUNNING=()
 PENDING=()
+REQUEUED=()
 OTHER=()
 
 parse_sacct_jobs() {
@@ -330,6 +331,8 @@ parse_sacct_jobs() {
             CANCELLED+=("$run")
         elif [[ $state = "PENDING" ]]; then
             PENDING+=($run)
+        elif [[ $state = "REQUEUED" ]]; then
+            REQUEUED+=($run)
         else
             OTHER+=($run)
         fi
@@ -608,6 +611,10 @@ report_mode() {
  
     if [[ ${#CANCELLED[@]} > 0 ]]; then
         echo "${#CANCELLED[@]} CANCELLED jobs"
+    fi
+
+    if [[ ${#REQUEUED[@]} > 0 ]]; then
+        echo "${#REQUEUED[@]} REQUEUED jobs"
     fi
 
     echo "${#RUNNING[@]} RUNNING jobs"

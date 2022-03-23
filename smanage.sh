@@ -72,8 +72,8 @@ Create, reset or append job ids to a config file
 }
 
 usage_report_mode() {
-echo 'usage: smanage report [--config <CONFIG>] [--sacct <SACCT_ARGS>]
-Output the report for jobs defined by CONFIG and SACCT_ARGS
+echo 'usage: smanage report [--config <CONFIG>] [--both <SACCT_AND_SQUEUE_ARGS>] [--sacct <SACCT_ARGS>] [--squeue <SQUEUE_ARGS>]
+Output the report for jobs defined by CONFIG, SACCT_AND_SQUEUE_ARGS, SACCT_ARGS and SQUEUE_ARGS
 '
 }
 
@@ -109,12 +109,22 @@ MAX_ID=[max job index of the array]
 
 #### GLOBALS ####
 SACCT=/usr/bin/sacct
+SQUEUE=/usr/bin/squeue
 SBATCH=/usr/bin/sbatch
 MaxArraySize=$(/usr/bin/scontrol show config | sed -n '/^MaxArraySize/s/.*= *//p')
 
 # Required SACCT arguments and idexes to them
 SACCT_ARGS+=("-XP --noheader") 
-export SACCT_FORMAT='jobid,state,partition,submit,start,end,jobidraw'
+export SACCT_FORMAT='jobid,state,partition,submit,start,end,jobidraw,reason'
+declare -a SQUEUE_ARGS
+SQUEUE_ARGS+=("-h") 
+export SQUEUE_FORMAT='%i|%T|%P|%V|%S|%e|%A|%r'
+
+export SLURM_TIME_FORMAT="%s"
+
+SACCT_RUN=0
+SQUEUE_RUN=0
+
 JOBID=0			# get the jobid from jobid_jobstep
 JOBSTEP=1		# get the jobstep from jobid_jobstep
 JOBSTATE=1		# Job state
@@ -122,6 +132,8 @@ PARTITION=2		# Where is the job running?
 SUBMIT_TIME=3		# Submit time
 START_TIME=4		# Start time
 END_TIME=5		# End time
+JOB_ID_RAW=6    # Raw Job ID
+REASON=7        # Reason why job failed or is pending
 
 #### Helper funtions for printing ####
 
@@ -132,7 +144,8 @@ pretty_print_tabs() {
 	count=1
 	mod=5
 	for l in ${list[@]}; do
-		printf "\t$l"
+		printf "\t"
+		echo -n "$l"
 		if (( $count % $mod == 0 )); then
 			printf "\n"
 		fi
@@ -148,7 +161,7 @@ pretty_print_commas() {
 
 	count=0
 	for l in ${list[@]}; do
-		printf "$l"
+		echo -n "$l"
 		((count+=1))
 		if (( $count < ${#list[@]} )); then
 			printf ","
@@ -164,8 +177,8 @@ print_sorted_jobs() {
     sorted=( $(
 		for l in ${list[@]}; do
 			IFS='_' read -ra split <<< "$l"
-			echo ${split[1]}
-		done | sort -nu
+			echo ${split[0]}_${split[1]}
+		done | sort -n | uniq
 		) )
 	pretty_print_commas ${sorted[@]}
 }
@@ -185,7 +198,7 @@ get_sorted_jobs() {
 		for l in ${list[@]}; do
 			IFS='_' read -ra split <<< "$l"
 			echo ${split[0]}
-		done | sort -nu
+		done | sort -n | uniq
 		) )
     last=$((${#sorted[@]} - 1))
 	if [[ $VERBOSE -eq 1 ]]; then
@@ -217,25 +230,30 @@ run_times() {
 
 	sum_wall_time=0
 	sum_elapsed=0
+    max_wall_time=0
+    max_elapsed=0
     
     if [[ ${#runs[@]} -gt 10000 ]]; then 
-        sample_size=$((${#runs[@]} / 10 ))
+        increment=10
     else
-        sample_size=${#runs[@]}
+        increment=1
     fi
 
     local idx=0
-    for run in ${runs[@]}; do
-        idx=$(($idx + 1))
-        if [[ $idx -gt $sample_size ]]; then
-            break
-        fi
+    local sample_size=0
+    for idx in $(seq 0 $increment ${#runs[@]}); do
+        run="${runs[$idx]}"
+        sample_size=$((sample_size+1))
 		IFS='|' read -ra split <<< "$run"
-		submit_=$(date --date=${split[$SUBMIT_TIME]} +%s )
-		start_=$(date --date=${split[$START_TIME]} +%s )
-		end_=$(date --date=${split[$END_TIME]} +%s )
-		sum_elapsed=$(( sum_elapsed + $(( $end_ - $start_ )) ))
-		sum_wall_time=$((sum_wall_time + $(( $end_ - $submit_ )) ))
+		submit_=${split[$SUBMIT_TIME]}
+		start_=${split[$START_TIME]}
+		end_=${split[$END_TIME]}
+        elapsed=$(( end_ - start_ ))
+        wall_time=$(( end_ - submit_ ))
+		sum_elapsed=$(( sum_elapsed + elapsed ))
+		sum_wall_time=$((sum_wall_time + wall_time ))
+        ((elapsed > max_elapsed)) && max_elapsed=$elapsed
+        ((wall_time > max_wall_time)) && max_wall_time=$wall_time
 	done
 
 	avg_elapsed=$(($sum_elapsed / $sample_size))
@@ -243,6 +261,8 @@ run_times() {
 
 	echo "	Avg Run Time: $(convertsecs $avg_elapsed)"
 	echo "	Avg Wall Time: $(convertsecs $avg_wall_time)"
+	echo "	Max Run Time: $(convertsecs $max_elapsed)"
+	echo "	Max Wall Time: $(convertsecs $max_wall_time)"
 }
 
 set_config_value() {
@@ -265,7 +285,10 @@ TIMEOUT=()
 CANCELLED=()
 RUNNING=()
 PENDING=()
+REQUEUED=()
 OTHER=()
+
+NUM_FINISHED_JOBS=0
 
 parse_sacct_jobs() {
    
@@ -274,57 +297,127 @@ parse_sacct_jobs() {
         source $CONFIG
         if [[ -n $JOB_IDS ]]; then
             SACCT_ARGS+=("--jobs=${JOB_IDS}")
+            SQUEUE_ARGS+=("--jobs=${JOB_IDS}")
         fi
         if [[ -n $BATCH_NAME ]]; then
             SACCT_ARGS+=("--name=${BATCH_NAME}")
+            SQUEUE_ARGS+=("--name=${BATCH_NAME}")
         fi
         if [[ -n $BATCH_DATE ]]; then
             SACCT_ARGS+=("-S ${BATCH_DATE}")
         fi
     fi
-   
-    echo "Finding jobs using: $SACCT ${SACCT_ARGS[@]}"
-    all=()
-    while IFS=$'\n' read -r line; do
-        all+=("$line")
-    done < <($SACCT ${SACCT_ARGS[@]})
 
-    if [[ ${#all[@]} -eq 0 ]]; then
-	    echo "No jobs found with these sacct args"
-    else
-        echo "Found ${#all[@]} jobs: $(get_sorted_jobs "${all[@]}")"
-    fi
-    
-    # Split the job list by STATE
-    for run in "${all[@]}"; do
-	    IFS='|' read -ra split <<< "$run" # split the sacct line by '|'
-        state=${split[$JOBSTATE]}
-        if [[ $EXCLUDE -eq 1 ]]; then
-            # don't process excluded jobs
-		    IFS='_' read -ra job <<< "${split[$JOBID]}"
-	        jobid=${job[$JOBID]}
-		    if [[ "${EXCLUDED[@]}" =~ "${jobid}" ]]; then
-			    continue
-		    fi
-	    fi
- 
-        if [[ $state = "COMPLETED" ]]; then
-            COMPLETED+=($run)
-        elif [[ $state = "FAILED" ]]; then
-            FAILED+=($run)
-        elif [[ $state = "TIMEOUT" ]]; then
-            TIMEOUT+=($run)
-        elif [[ $state = "RUNNING" ]]; then
-            RUNNING+=($run)
-        elif [[ $state =~ "CANCELLED" ]]; then
-            CANCELLED+=("$run")
-        elif [[ $state = "PENDING" ]]; then
-            PENDING+=($run)
+    if [ $SACCT_RUN != 0 ]; then   
+        echo "Finding jobs using: $SACCT ${SACCT_ARGS[@]} with format ${SACCT_FORMAT}"
+        all=()
+        while IFS=$'\n' read -r line; do
+            all+=("$line")
+        done < <($SACCT ${SACCT_ARGS[@]})
+
+        if [[ ${#all[@]} -eq 0 ]]; then
+            echo "No jobs found with these sacct args"
         else
-            OTHER+=($run)
+            echo "Found ${#all[@]} jobs: $(get_sorted_jobs "${all[@]}")"
         fi
-    
-    done
+        
+        # Split the job list by STATE
+        for run in "${all[@]}"; do
+            IFS='|' read -ra split <<< "$run" # split the sacct line by '|'
+            state=${split[$JOBSTATE]}
+            if [[ $EXCLUDE -eq 1 ]]; then
+                # don't process excluded jobs
+                IFS='_' read -ra job <<< "${split[$JOBID]}"
+                jobid=${job[$JOBID]}
+                if [[ "${EXCLUDED[@]}" =~ "${jobid}" ]]; then
+                    continue
+                fi
+            fi
+     
+            if [[ $state = "COMPLETED" ]]; then
+                COMPLETED+=($run)
+                NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+            elif [[ $state = "FAILED" ]]; then
+                FAILED+=($run)
+                NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+            elif [[ $state = "TIMEOUT" ]]; then
+                TIMEOUT+=($run)
+                NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+            elif [[ $state = "RUNNING" ]]; then
+                RUNNING+=($run)
+            elif [[ $state =~ "CANCELLED" ]]; then
+                CANCELLED+=("$run")
+                NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+            elif [[ $state = "PENDING" ]]; then
+                [ $SQUEUE_RUN = 0 ] && PENDING+=($run)
+            elif [[ $state = "REQUEUED" ]]; then
+                REQUEUED+=($run)
+            else
+                OTHER+=($run)
+            fi
+        
+        done
+    fi
+
+    if [ $SQUEUE_RUN = 1 ] && [ $SACCT_RUN = 0 ]; then
+        SQUEUE_ARGS+=("--states=all")
+    fi
+
+    if [ $SQUEUE_RUN = 1 ]; then
+        echo "Finding jobs using: $SQUEUE ${SQUEUE_ARGS[@]} with format ${SQUEUE_FORMAT}"
+        all=()
+        while IFS=$'\n' read -r line; do
+            all+=("$line")
+        done < <(env SLURM_BITSTR_LEN=65535 $SQUEUE ${SQUEUE_ARGS[@]})
+
+        if [[ ${#all[@]} -eq 0 ]]; then
+            echo "No jobs found with these squeue args"
+        else
+            echo "Found ${#all[@]} jobs: $(get_sorted_jobs "${all[@]}")"
+        fi
+        
+        # Split the job list by STATE
+        for run in "${all[@]}"; do
+            IFS='|' read -ra split <<< "$run" # split the squeue line by '|'
+            state=${split[$JOBSTATE]}
+            if [[ $EXCLUDE -eq 1 ]]; then
+                # don't process excluded jobs
+                IFS='_' read -ra job <<< "${split[$JOBID]}"
+                jobid=${job[$JOBID]}
+                if [[ "${EXCLUDED[@]}" =~ "${jobid}" ]]; then
+                    continue
+                fi
+            fi
+
+            if [ $SACCT_RUN = 0 ]; then
+                if [[ $state = "COMPLETED" ]] || [[ $state = "COMPLETING" ]]; then
+                    COMPLETED+=($run)
+                    NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+                elif [[ $state = "FAILED" ]]; then
+                    FAILED+=($run)
+                    NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+                elif [[ $state = "TIMEOUT" ]]; then
+                    TIMEOUT+=($run)
+                    NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+                elif [[ $state = "RUNNING" ]]; then
+                    RUNNING+=($run)
+                elif [[ $state =~ "CANCELLED" ]]; then
+                    CANCELLED+=("$run")
+                    NUM_FINISHED_JOBS=$((NUM_FINISHED_JOBS+1))
+                elif [[ $state = "PENDING" ]]; then
+                    : # pass
+                elif [[ $state = "REQUEUED" ]]; then
+                    REQUEUED+=($run)
+                else
+                    OTHER+=($run)
+                fi
+            fi
+
+            if [[ $state = "PENDING" ]]; then
+                PENDING+=($run)
+            fi
+        done
+    fi
 }
 
 #### CONFIG MODE ####
@@ -461,8 +554,6 @@ config_mode() {
 handle_completed() {
 	runs=($@)
 
-    run_times ${runs[@]}
-
     if [[ -n $SMANAGE_EXT_SOURCE ]]; then
         _ext_handle_completed ${runs[@]}
     fi
@@ -509,33 +600,68 @@ handle_running() {
 	fi
 }
 
+count_steps() {
+    step="$1"
+
+    [ -z "$step" ] && echo 0 && return
+
+    if [[ "$step" == *","* ]]; then
+        step1=$(echo "$step" | cut -d ',' -f 1)
+        rest_steps=$(echo "$step" | cut -c $(($(echo "$step1" | wc -c)+1))-)
+    else
+        step1="$step"
+        rest_steps=""
+    fi
+    rest_count=$(count_steps "$rest_steps")
+    count=1
+    if [[ "$step1" == *"-"* ]]; then
+        leftjobstep=( $(echo "$step1" | cut -d '-' -f 1) )
+        rightjobstep=( $(echo "$step1" | cut -d '-' -f 2) )
+        count=$((rightjobstep - leftjobstep + 1))
+    fi
+    echo $((count+rest_count))
+}
+
 handle_pending() {
 	runs=($@)
 
 	list=()
     num_pending=0
+    declare -a run_counts
     for run in ${runs[@]}; do
         IFS='|' read -ra split <<< "$run"
 		list+=(${split[$JOBID]})
         IFS='_' read -ra job <<< "${split[$JOBID]}"
         jobstep=${job[$JOBSTEP]}
-        # Pending jobs may look like [###-###]
-        if [[ $jobstep =~ ^(\[)([[:digit:]]+)-([[:digit:]]+)(\])$ ]]; then
-            # Get how many are pending
-            leftjobstep=( $(echo "$jobstep" | tr -d '[[:alpha:]]' | cut -d '-' -f 1) )
-            rightjobstep=( $(echo "$jobstep" | tr -d '[[:alpha:]]' | cut -d '-' -f 2) )
-            num_pending=$((num_pending + rightjobstep - leftjobstep))
+        # Pending jobs may look like [###-###,###,###-###]%###
+        if [[ $jobstep =~ ^(\[)((([[:digit:]]+)-([[:digit:]]+)|([[:digit:]]+)),?)+(%[[:digit:]]+)?(\])$ ]]; then
+            clean_step=$(echo "$jobstep" | tr -d '[[:alpha:]]' | cut -d '%' -f 1)
+            step_size=$(count_steps $clean_step)
         else
-            num_pending=$((num_ending + 1))
+            step_size=1
         fi
+        # Get how many are pending
+        num_pending=$((num_pending + step_size))
+        run_counts+=($step_size "$run")
 	done
     echo "${num_pending} PENDING jobs"
+
+    print_reasons ${run_counts[@]}
 
 	if [[ $num_pending > 0 && $VERBOSE -eq 1 ]]; then
 	    echo "Pending jobs: "
 	    pretty_print_tabs ${list[@]}
 	    echo ""
 	fi
+
+    num_requeued_jobs=${#REQUEUED[@]}
+    num_running_jobs=${#RUNNING[@]}
+    num_waiting_jobs=$((num_requeued_jobs+num_pending))
+    num_all_jobs=$((NUM_FINISHED_JOBS+num_waiting_jobs+num_running_jobs))
+    echo "Finished $((100*NUM_FINISHED_JOBS/num_all_jobs))% of ${num_all_jobs} jobs"
+    if [[ $SQUEUE_RUN = 0 ]] || [[ $SACCT_RUN = 0 ]]; then
+      echo "Job count is inaccurate; to get accurate job counts, use --both argument."
+    fi
 }
 
 handle_other() {
@@ -551,8 +677,40 @@ handle_other() {
 	pretty_print_tabs ${list[@]}
 }
 
+print_reasons() {
+	runs=($@)
+    declare -A reasons
+
+    count=0
+    for run in ${runs[@]}; do
+        if [ $count = 0 ]; then
+            count=$run
+            continue
+        fi
+    	IFS='|' read -ra split <<< "$run"
+    	reason=${split[$REASON]}
+        if [ "$reason" = "None" ] || [ -z "$reason" ]; then continue; fi
+        if [ ${reasons[$reason]+_} ]; then
+            reasons[$reason]=$((${reasons[$reason]}+count))
+        else
+            reasons[$reason]=$count
+        fi
+        count=0
+    done
+
+    if [ ${#reasons[@]} -gt 0 ]; then
+        echo -n "	Reasons: "
+        for reason in ${!reasons[@]}; do
+            echo -n "${reasons[$reason]} $reason, "
+        done
+        echo
+    fi
+}
+
+
+
 report_mode() {
-    local opts="--config --sacct"
+    local opts="--config --sacct --squeue --both"
     
     while test $# -ne 0; do
         case $1 in
@@ -563,9 +721,26 @@ report_mode() {
             fi
             CONFIG=$(readlink -f $1)
         ;;
-        --sacct) shift
+        --both) shift
+            SACCT_RUN=1
+            SQUEUE_RUN=1
             while [[ -n $1 && ! $opts =~ $1 ]]; do
                 SACCT_ARGS+=($1)
+                SQUEUE_ARGS+=($1)
+                shift
+            done
+        ;;
+        --sacct) shift
+            SACCT_RUN=1
+            while [[ -n $1 && ! $opts =~ $1 ]]; do
+                SACCT_ARGS+=($1)
+                shift
+            done
+        ;;
+        --squeue) shift
+            SQUEUE_RUN=1
+            while [[ -n $1 && ! $opts =~ $1 ]]; do
+                SQUEUE_ARGS+=($1)
                 shift
             done
         ;;
@@ -574,17 +749,24 @@ report_mode() {
             return 1
         ;;        
         esac
-        shift
     done
     
     parse_sacct_jobs
     
     echo "${#COMPLETED[@]} COMPLETED jobs"
+    run_times ${COMPLETED[@]}
     if [[ ${#COMPLETED[@]} > 0 && $VERBOSE -eq 1 ]]; then
         handle_completed ${COMPLETED[@]}
     fi
     
     echo "${#FAILED[@]} FAILED jobs"
+
+    declare -a failed
+    for f in ${FAILED[@]}; do
+        failed+=(1 "$f")
+    done
+    print_reasons ${failed[@]}
+
     if [[ ${#FAILED[@]} > 0 && $VERBOSE -eq 1 ]]; then
     	handle_failed ${FAILED[@]}
     fi
@@ -598,6 +780,10 @@ report_mode() {
  
     if [[ ${#CANCELLED[@]} > 0 ]]; then
         echo "${#CANCELLED[@]} CANCELLED jobs"
+    fi
+
+    if [[ ${#REQUEUED[@]} > 0 ]]; then
+        echo "${#REQUEUED[@]} REQUEUED jobs"
     fi
 
     echo "${#RUNNING[@]} RUNNING jobs"

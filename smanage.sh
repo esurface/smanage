@@ -224,17 +224,16 @@ run_times() {
     max_elapsed=0
     
     if [[ ${#runs[@]} -gt 10000 ]]; then 
-        sample_size=$((${#runs[@]} / 10 ))
+        increment=10
     else
-        sample_size=${#runs[@]}
+        increment=1
     fi
 
     local idx=0
-    for run in ${runs[@]}; do
-        idx=$(($idx + 1))
-        if [[ $idx -gt $sample_size ]]; then
-            break
-        fi
+    local sample_size=0
+    for idx in $(seq 0 $increment ${#runs[@]}); do
+        run="${runs[$idx]}"
+        sample_size=$((sample_size+1))
 		IFS='|' read -ra split <<< "$run"
 		submit_=${split[$SUBMIT_TIME]}
 		start_=${split[$START_TIME]}
